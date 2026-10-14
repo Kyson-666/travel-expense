@@ -144,17 +144,42 @@ async function main() {
     const offlineWindows = [];
     const beginOffline = async () => { const w = { from: Date.now(), to: Infinity }; offlineWindows.push(w); await setOffline(true); return w; };
     const endOffline = async (w) => { w.to = Date.now(); await setOffline(false); };
+    /* 点击流水行打开编辑弹层。注意：同步事件会触发异步重渲染（容器先清空为「加载流水…」，
+     * 异步重绘后行节点才回来）—— 此刻行可能短暂不存在，直接 click 会静默落空。
+     * 故：等行就绪 + 允许重试，隔离测试自身的时序抖动。 */
+    const openRowSheet = async (expId) => {
+      for (let attempt = 0; attempt < 6; attempt++) {
+        if (!(await waitFor(`!!document.querySelector('.led[data-exp="${expId}"]')`, 8000))) continue;
+        await ev(`(()=>{const r=document.querySelector('.led[data-exp="${expId}"]'); if(r) r.click();})()`);
+        if (await waitFor(`document.getElementById('expMask').classList.contains('open') && document.getElementById('e_title').textContent.indexOf('编辑') >= 0`, 4000)) return true;
+        await sleep(250);
+      }
+      return false;
+    };
     const addExpenseViaUI = async (amount, category, title) => {
-      await ev(`document.getElementById('lgAdd') && document.getElementById('lgAdd').click()`);
-      if (!(await waitFor(`document.getElementById('expMask').classList.contains('open')`, 4000))) {
-        await ev(`document.getElementById('d_ledgerAdd') && document.getElementById('d_ledgerAdd').click()`);
-        await waitFor(`document.getElementById('expMask').classList.contains('open')`, 4000);
+      /* 同上：入口按钮也可能处于重渲染窗口，等它就绪再点（避免误点旧节点导致重复记账） */
+      await waitFor(`document.getElementById('lgAdd') || document.getElementById('d_ledgerAdd')`, 8000);
+      await ev(`(()=>{const b=document.getElementById('lgAdd')||document.getElementById('d_ledgerAdd'); if(b) b.click();})()`);
+      if (!(await waitFor(`document.getElementById('expMask').classList.contains('open')`, 5000))) {
+        await waitFor(`!!document.getElementById('d_ledgerAdd')`, 5000);
+        await ev(`(()=>{const b=document.getElementById('d_ledgerAdd'); if(b) b.click();})()`);
+        await waitFor(`document.getElementById('expMask').classList.contains('open')`, 5000);
       }
       await ev(`(()=>{const a=document.getElementById('e_amount');a.value='${amount}';a.dispatchEvent(new Event('input'));})()`);
       if (category) await ev(`document.querySelector('#e_cats [data-c="${category}"]').click()`);
       if (title) await ev(`(()=>{const t=document.getElementById('e_name');t.value=${JSON.stringify(title)};t.dispatchEvent(new Event('input'));})()`);
       await ev(`document.getElementById('e_save').click()`);
       await sleep(700);
+    };
+    /* 按 1080 宽（与 screenshots/ 既有规格一致）抓图到 .te_test/，供 README 使用 */
+    const captureShot = async (name) => {
+      await send('Emulation.setDeviceMetricsOverride', { width: 1080, height: 900, deviceScaleFactor: 1, mobile: false });
+      await sleep(350);
+      const cap = await send('Page.captureScreenshot', { format: 'png' });
+      fs.writeFileSync(path.join(ROOT, '.te_test', name), Buffer.from(cap.result.data, 'base64'));
+      await send('Emulation.clearDeviceMetricsOverride');
+      await sleep(200);
+      console.log('  ℹ 截图：.te_test/' + name);
     };
 
     /* ---------- 打开应用并登录态注入 ---------- */
@@ -192,6 +217,8 @@ async function main() {
     await ev(`(()=>{const b=document.getElementById('offlineAction'); if(b) b.click();})()`);
     check('B7 队列面板列出该笔', await waitFor(`document.querySelectorAll('#offlineQueueList .offline-queue-item').length >= 1`, 4000));
     await ev(`(()=>{const c=document.getElementById('offlineClose'); if(c) c.click();})()`);
+    await sleep(300);
+    await captureShot('shot-offline-pending.png');
 
     /* ---------- C. 恢复网络自动同步 ---------- */
     section('C. 恢复网络自动同步（恰好一次）');
@@ -238,13 +265,12 @@ async function main() {
     const editId = offlineRow.id;
     const winF = await beginOffline();
     await waitFor(`document.getElementById('offlineBar').classList.contains('show')`, 5000);
-    await ev(`(()=>{const r=document.querySelector('.led[data-exp="${editId}"]'); if(r) r.click();})()`);
-    await waitFor(`document.getElementById('expMask').classList.contains('open')`, 4000);
+    check('F0 编辑弹层已打开（编辑模式）', await openRowSheet(editId));
     await ev(`(()=>{const a=document.getElementById('e_amount');a.value='345';a.dispatchEvent(new Event('input'));})()`);
     await ev(`document.getElementById('e_save').click()`);
     await sleep(700);
     check('F1 离线编辑进入待同步（虚线行 + 本地值已生效）',
-      await waitFor(`(()=>{const r=document.querySelector('.led.pending[data-exp="${editId}"]'); return !!r && r.innerText.indexOf('345')>=0;})()`, 6000));
+      await waitFor(`(()=>{const r=document.querySelector('.led.pending[data-exp="${editId}"]'); return !!r && r.innerText.indexOf('345')>=0;})()`, 8000));
     check('F2 服务端仍为旧值（离线未误发）',
       ((await api('GET', `/api/routes/${routeId}/expenses?pageSize=500`, null, cookie)).json.data.list.find(e => e.id === editId) || {}).amount === 333);
     await endOffline(winF);
@@ -258,8 +284,7 @@ async function main() {
     await api('PATCH', `/api/routes/${routeId}/expenses/${editId}`, { amount: 400 }, cookie);
     const winG = await beginOffline();
     await waitFor(`document.getElementById('offlineBar').classList.contains('show')`, 5000);
-    await ev(`(()=>{const r=document.querySelector('.led[data-exp="${editId}"]'); if(r) r.click();})()`);
-    await waitFor(`document.getElementById('expMask').classList.contains('open')`, 4000);
+    await openRowSheet(editId);
     await ev(`(()=>{const a=document.getElementById('e_amount');a.value='460';a.dispatchEvent(new Event('input'));})()`);
     await ev(`document.getElementById('e_save').click()`);
     await sleep(700);
@@ -269,6 +294,7 @@ async function main() {
     await ev(`document.getElementById('offlineAction').click()`);
     check('G2 队列面板提供「保留本地 / 采用服务端」',
       await waitFor(`document.querySelectorAll('#offlineQueueList [data-keep]').length===1 && document.querySelectorAll('#offlineQueueList [data-adopt]').length===1`, 5000));
+    await captureShot('shot-offline-conflict.png');
     await ev(`document.querySelector('#offlineQueueList [data-adopt]').click()`);
     check('G3 采用服务端后冲突项移除', await waitFor(`document.querySelectorAll('#offlineQueueList .offline-queue-item').length===0`, 5000));
     await ev(`document.getElementById('offlineClose').click()`);

@@ -39,25 +39,30 @@
 
 | 工作台 | 逐笔流水 |
 |---|---|
-| ![工作台](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.3/screenshots/01-workbench.png) | ![逐笔流水](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.3/screenshots/02-ledger.png) |
+| ![工作台](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/01-workbench.png) | ![逐笔流水](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/02-ledger.png) |
 | 路线卡片显示**「流水 N 笔」**徽标与**「＋ 记一笔」**直达入口；统计卡含总花费 / 出行次数 / 次均花费 / 总天数（未设预算时显示「未设置 / —」） | 台账式流水：**按日期倒序分组**（组头为当日小计）、按 9 类筛选（胶囊只列出实际用到的类目）；历史数据以「期初（历史数据）」承载，并标注**「期初结转 · 不参与分摊」** |
 
 | 记一笔 | AA 结算 |
 |---|---|
-| ![记一笔](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.3/screenshots/03-add-expense.png) | ![AA 结算](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.3/screenshots/04-settle.png) |
+| ![记一笔](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/03-add-expense.png) | ![AA 结算](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/04-settle.png) |
 | 金额大号输入 + 快捷金额；选类目、**谁付的钱**、**谁参与分摊**；底部实时显示「**N 人平分，每人 ¥X · 由 XX 垫付**」；未选分摊人时给出橙色告警（该笔仅记录实付） | 三页签（概览 / 流水 / 结算）中的结算页：每人**实付 / 应负担 / 差额**（绿为应收、红为应付）+ **最少转账方案**（本例 4 人 → 3 笔，等于人数 − 1）；底部口径说明「未指定付款人（含历史期初数据）不参与结算」 |
 
 ### 同行人 · 路线表单 · AI 规划
 
 | 同行人管理 | 路线表单 |
 |---|---|
-| ![同行人管理](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.3/screenshots/05-travelers.png) | ![路线表单](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.3/screenshots/06-route-form.png) |
+| ![同行人管理](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/05-travelers.png) | ![路线表单](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/06-route-form.png) |
 | 逗号 / 空格分隔一次加多人；可改名、**「设为我」**标记记账人本人、移除（已被流水引用时二次确认并说明影响）；名单与登记人数不一致时给出提示 | **景点路线 / 住宿按天分框**：填好起止日期后自动按每天生成一个输入框（框头显示「D1 · 10月2日 周五」），长行程不再挤在一个框里；历史单框文本打开时会**自动按天预填**。表单**不再手工填写 9 类花费**，改为「由逐笔流水自动汇总（当前 N 笔）」+ **「去记流水」**直达 |
 
 | AI 规划：行程 / 注意事项 / 美食推荐 一次生成 |
 |---|
-| ![AI 规划与备注回填](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.3/screenshots/07-ai-notes.png) |
+| ![AI 规划与备注回填](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/07-ai-notes.png) |
 | 「景点路线」旁点「AI 规划」→ 按天行程自动填入（按地理顺序、标注当天住宿城市）；**同时生成的「注意事项」与「美食推荐」自动写入备注**（上图中备注内容即 AI 产出）。若备注已有你自己的文字，则在其后**追加**（`—— AI 补充 ——`）而不是覆盖；重复生成也不会重复追加。生成后可点「调整」用大白话多轮修改。 |
+
+| 离线记账 · 待同步 | 离线记账 · 冲突处置与队列 |
+|---|---|
+| ![离线记账：待同步行与离线状态条](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/08-offline-pending.png) | ![同步队列：冲突二选一 · 导出留档 · 清理缓存](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/09-offline-queue-conflict.png) |
+| 断网也能记一笔：新行以**虚线边框 + 「待同步」胶囊**标记，顶部状态条显示待同步笔数；恢复网络后自动批量、幂等同步 | 同一笔在别处被修改时，队列面板给出**保留本地 / 采用服务端**二选一（可先「导出队列」留档）；面板同时显示**存储用量**并提供**清理缓存**（只清缓存、不动待同步数据） |
 
 ---
 
