@@ -4,6 +4,7 @@ export const store = {
   site: { site_name: '旅行经费工作台', allow_register: true, register_mode: 'all', announce_text: '', home_currency: 'CNY', fx_rates: { CNY: 1 } },
   hideSeed: localStorage.getItem('te_hide_seed') === '1'
 };
+const OFFLINE_USER_KEY = 'te_offline_user';
 
 export function toast(msg, ms = 2200) {
   let el = document.getElementById('toast');
@@ -43,10 +44,18 @@ function getDefaultServerUrl() {
 export function getServerUrl() {
   return (localStorage.getItem('te_server_url') || BUILTIN_SERVER_URL || getDefaultServerUrl() || '').replace(/\/+$/, '');
 }
-export function setServerUrl(u) { if (u) localStorage.setItem('te_server_url', u.replace(/\/+$/, '')); else localStorage.removeItem('te_server_url'); }
+export function setServerUrl(u) {
+  if (u) localStorage.setItem('te_server_url', u.replace(/\/+$/, ''));
+  else localStorage.removeItem('te_server_url');
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('te:server-change'));
+}
 
 async function request(method, path, body) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  /* 弱网下 30s 超时兜底，否则请求可能永远 pending（离线入队的分流条件无法触发）。 */
+  const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
   const opt = { method, credentials: 'include', mode: 'cors' };
+  if (controller) opt.signal = controller.signal;
   if (body !== undefined) {
     opt.headers = { 'Content-Type': 'application/json' };
     opt.body = JSON.stringify(body);
@@ -55,15 +64,17 @@ async function request(method, path, body) {
   try {
     r = await fetch(getServerUrl() + '/api' + path, opt);
   } catch (e) {
-    /* 移动网络/证书/代理异常时 fetch 抛 TypeError（消息常为 Failed to fetch），提示不友好 */
-    const isNetwork = !e.status && (e.name === 'TypeError' || /failed to fetch|network|net::err/i.test(e.message));
+    /* 移动网络/证书/代理异常时 fetch 抛 TypeError；超时同样归为网络错误以便离线入队。 */
+    const isNetwork = !e.status && (e.name === 'TypeError' || e.name === 'AbortError' || /failed to fetch|network|net::err/i.test(e.message));
     const msg = isNetwork
-      ? '网络连接失败，请检查网络或该站点证书是否受信任'
+      ? (e.name === 'AbortError' ? '请求超时，请检查网络后重试' : '网络连接失败，请检查网络或该站点证书是否受信任')
       : (e.message || '请求失败');
     const err = new Error(msg);
     err.network = isNetwork;
     err.original = e;
     throw err;
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
   let data = null;
   try { data = await r.json(); } catch (e) { /* empty */ }
@@ -75,6 +86,10 @@ async function request(method, path, body) {
   }
   return data ? data.data : null;
 }
+
+/* 判断错误是否为「传输层网络失败」（fetch 抛错 / 超时），区别于业务错误：
+ * 离线入队与降级判定的公共依据。offline.js 的退避判定在此基础上把 5xx 也视为可重试。 */
+export function isNetworkError(e) { return !!(e && e.network); }
 
 export const api = {
   get: (p) => request('GET', p),
@@ -96,8 +111,17 @@ export async function loadSite() {
 export async function fetchMe() {
   try {
     store.user = await api.get('/auth/me');
+    try { localStorage.setItem(OFFLINE_USER_KEY, JSON.stringify(store.user)); } catch (e) { /* storage may be unavailable */ }
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('te:auth'));
     return store.user;
   } catch (e) {
+    if (isNetworkError(e)) {
+      /* 仅网络失败时允许使用最近一次已认证的公开用户资料进入离线只读/记账界面；
+       * Cookie 与授权仍由服务端校验，队列在恢复网络后遇到 401 会保留。 */
+      try { store.user = JSON.parse(localStorage.getItem(OFFLINE_USER_KEY) || 'null'); } catch (ignore) { store.user = null; }
+      return store.user;
+    }
+    if (e && e.status === 401) { try { localStorage.removeItem(OFFLINE_USER_KEY); } catch (ignore) {} }
     store.user = null;
     return null;
   }
@@ -106,7 +130,12 @@ export async function fetchMe() {
 /* 登录 / 登出后的状态同步 */
 export function applyAuth(user) {
   store.user = user;
+  try {
+    if (user) localStorage.setItem(OFFLINE_USER_KEY, JSON.stringify(user));
+    else localStorage.removeItem(OFFLINE_USER_KEY);
+  } catch (e) { /* storage may be unavailable */ }
   renderHeader();
+  if (user && typeof window !== 'undefined') window.dispatchEvent(new Event('te:auth'));
 }
 
 export function renderHeader() {

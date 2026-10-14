@@ -1,0 +1,82 @@
+/* proto.css —— PWA 离线记账原型 · 仅新增组件样式
+ * 约束：不覆盖 public/styles.css 的任何既有类；落地时按下方「合并说明」并入 public/styles.css。
+ * 全部颜色取自既有 CSS 变量（--primary / --danger / --accent / --line / --muted …），不引入新视觉语言。
+ */
+
+/* ---------- 顶部离线指示条 ---------- */
+/* 落地建议：置于 <header> 之后、#view 之前；默认 display:none，由 offline-ui.js 控制 */
+.offline-bar{display:none;align-items:center;gap:8px;padding:8px 12px;font-size:13px;
+  border-bottom:1px solid var(--line);background:#fff8e6;color:#8a6100}
+.offline-bar.show{display:flex}
+.offline-bar.off{background:#fff4e5;color:#9a5b00}
+.offline-bar.syncing{background:#eaf6ff;color:#16607f}
+.offline-bar.blocked{background:#fdece8;color:var(--danger)}
+.offline-bar .sp{flex:1}
+.offline-bar button{background:transparent;border:1px solid currentColor;color:inherit;
+  border-radius:8px;padding:3px 10px;font-size:12px;cursor:pointer;font-family:inherit}
+.offline-bar svg{width:15px;height:15px;flex:0 0 auto}
+
+/* 同步中的旋转图标（纯 CSS，无依赖） */
+@keyframes proto-spin{to{transform:rotate(360deg)}}
+.proto-spin{animation:proto-spin 1s linear infinite}
+
+/* ---------- 待同步的流水行 ---------- */
+/* 落地建议：ledger.js 的 ledgerRow() 在 e.pending 时追加 pending 类 */
+.led.pending{border-style:dashed;background:#fffdf7}
+.led.pending .amt{color:var(--muted)}
+
+/* ---------- 状态胶囊（复用 .pill 基类，仅补语义色） ---------- */
+.pill-pending{background:#fff4e5;color:#9a5b00}
+.pill-syncing{background:#eaf6ff;color:#16607f}
+.pill-degraded{background:#fff8e6;color:#8a6100}
+.pill-rejected{background:#fdece8;color:var(--danger)}
+.pill-conflict{background:#fdece8;color:var(--danger)}
+
+/* ---------- 同步队列面板 ---------- */
+.q-item{display:flex;align-items:center;gap:10px;padding:10px 11px;border:1px solid var(--line);
+  border-radius:12px;background:#fff;margin-bottom:8px}
+.q-item .t{flex:1;min-width:0}
+.q-item .t .n{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-item .t .m{font-size:11.5px;color:var(--muted);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.q-item .amt{font-size:14px;font-weight:700;color:var(--primary-d);white-space:nowrap}
+.q-actions{display:flex;gap:6px;flex:0 0 auto}
+.q-actions button{background:transparent;border:1px solid var(--line);border-radius:8px;
+  padding:3px 9px;font-size:12px;cursor:pointer;font-family:inherit;color:var(--muted)}
+.q-actions button:hover{color:var(--primary-d);border-color:var(--primary)}
+
+/* ---------- 演示控制台 ---------- */
+.demo-panel{border:1px dashed var(--accent);background:#f7fcff}
+.demo-panel h3{color:#16607f}
+.demo-panel h3 svg{color:var(--accent)}
+.demo-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.demo-row label{font-size:12.5px;color:var(--muted)}
+.demo-row select,.demo-row input{font-family:inherit;font-size:13px;padding:6px 8px;
+  border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--text)}
+.demo-note{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6}
+
+/* ---------- 引擎事件日志 ---------- */
+.log{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;
+  line-height:1.7;max-height:220px;overflow-y:auto;background:#f7fbfa;border:1px solid var(--line);
+  border-radius:10px;padding:9px 11px;white-space:pre-wrap;word-break:break-word}
+.log .ts{color:#9db4ae}
+.log .ok{color:var(--primary-d)}
+.log .warn{color:#9a5b00}
+.log .err{color:var(--danger)}
+.log .info{color:#16607f}
+
+/* ---------- 计数徽标（指示条内） ---------- */
+.count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;
+  padding:0 5px;border-radius:9px;background:var(--danger);color:#fff;font-size:11px;font-weight:700}
+
+/* ---------- 空态 ---------- */
+.q-empty{text-align:center;color:var(--muted);font-size:13px;padding:18px 0}
+
+/* ============================================================================
+   落地合并说明（实施时执行，勿整份拷贝进 public/styles.css）
+   1. .offline-bar / .proto-spin        → 追加到 public/styles.css 的「布局」段末尾
+   2. .led.pending                      → 紧邻既有 .led 规则追加
+   3. .pill-* 语义色                    → 紧邻既有 .pill-ok / .pill-ban 追加
+   4. .q-item / .q-actions              → 追加到「表格与列表」段
+   5. .log / .count-badge               → 追加到「面板」段
+   6. .demo-panel                       → **不要合并**（仅原型用于演示控制台）
+   ============================================================================ */

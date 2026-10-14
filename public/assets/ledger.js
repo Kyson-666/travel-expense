@@ -8,8 +8,9 @@
  *   · 9 类花费（routes.exp_*）由服务端按流水自动汇总，前端不再手工提交
  *   · 存在后端的金额一律为**路线币种**金额，前端不做换算
  */
-import { api, store, toast, esc, fmt, fmtMoney, curSymbol, CATS } from './api.js';
+import { api, store, toast, esc, fmt, fmtMoney, curSymbol, CATS, isNetworkError } from './api.js';
 import { COLORS, totalOf } from './charts.js';
+import { getOfflineEngine, createClientId } from './offline.js';
 
 /* 同行人头像配色（唯一来源）：与 9 类花费配色（charts.COLORS）语义不同，独立维护 */
 const TV_COLORS = ['#60a5fa', '#3b82f6', '#06b6d4', '#f59e0b', '#ef6b5e', '#a78bfa', '#ec4899', '#fb923c', '#94a3b8'];
@@ -26,6 +27,29 @@ const st = {
   draft: null,          /* 记一笔草稿 */
   onChanged: null       /* 流水变化后的回调（刷新卡片/统计/详情页签） */
 };
+let watchedOffline = null;
+let syncRefreshTimer = null;
+
+function watchOfflineSync() {
+  const offline = getOfflineEngine();
+  if (!offline || watchedOffline === offline) return;
+  watchedOffline = offline;
+  const refresh = (detail) => {
+    const rid = detail && (detail.route_id || (detail.op && detail.op.route_id));
+    if (!st.route || String(st.route.id) !== String(rid)) return;
+    clearTimeout(syncRefreshTimer);
+    syncRefreshTimer = setTimeout(() => {
+      if (typeof st.onChanged === 'function') st.onChanged();
+    }, 250);
+  };
+  /* synced：本地操作已落库；failed/conflict：行上要显示「需处理/冲突」标记；
+   * cache-updated：增量补拉合并了其他端的变更。 */
+  offline.on('synced', refresh);
+  offline.on('failed', refresh);
+  offline.on('conflict', refresh);
+  offline.on('resolved', refresh);
+  offline.on('cache-updated', refresh);
+}
 
 /* ---------- 小工具 ---------- */
 function maskOpen(id) { const el = document.getElementById(id); if (el) el.classList.add('open'); }
@@ -45,19 +69,67 @@ function headcount() {
 
 /* ---------- 数据加载 ---------- */
 async function loadTravelers(route) {
-  const r = await api.get('/routes/' + encodeURIComponent(route.id) + '/travelers');
-  st.travelers = (r && r.list) || [];
-  return st.travelers;
+  const offline = getOfflineEngine();
+  try {
+    const r = await api.get('/routes/' + encodeURIComponent(route.id) + '/travelers');
+    st.travelers = (r && r.list) || [];
+    if (offline) await offline.setMeta('travelers:' + route.id, st.travelers);
+    return st.travelers;
+  } catch (e) {
+    if (offline && isNetworkError(e)) {
+      st.travelers = (await offline.getMeta('travelers:' + route.id)) || [];
+      if (st.travelers.length || route.is_seed) return st.travelers;
+    }
+    throw e;
+  }
 }
 
 async function loadExpenses(route, catFilter) {
+  const offline = getOfflineEngine();
   const p = new URLSearchParams();
-  const cat = catFilter === undefined ? st.catFilter : catFilter;
-  if (cat && cat !== '全部') p.set('category', cat);
+  /* 本地缓存必须保存完整列表；类目筛选在投影后本地执行，避免缓存被筛选响应覆盖。 */
+  p.set('pageSize', '500');
   const qs = p.toString();
-  const r = await api.get('/routes/' + encodeURIComponent(route.id) + '/expenses' + (qs ? '?' + qs : ''));
-  st.list = (r && r.list) || [];
-  st.summary = r ? { total: r.total, amount: r.amount, byCategory: r.byCategory } : null;
+  let r;
+  try {
+    const base = '/routes/' + encodeURIComponent(route.id) + '/expenses';
+    r = await api.get(base + '?' + qs + '&page=1');
+    const all = (r && r.list) ? r.list.slice() : [];
+    const total = Number(r && r.total) || all.length;
+    let page = 2;
+    while (all.length < total) {
+      const next = await api.get(base + '?' + qs + '&page=' + page++);
+      const rows = (next && next.list) || [];
+      if (!rows.length) break;
+      all.push(...rows);
+    }
+    r = { ...r, list: all, total: all.length };
+    if (offline) await offline.saveExpensesCache(route.id, r);
+  } catch (e) {
+    if (!offline || !isNetworkError(e)) throw e;
+    r = await offline.getExpensesCache(route.id);
+    if (!r) throw new Error('该路线尚无本地缓存。请先联网打开一次流水页，再使用离线记账。');
+  }
+  const projected = offline ? await offline.project(route.id, r.list || []) : (r.list || []);
+  const cat = catFilter === undefined ? st.catFilter : catFilter;
+  st.list = cat && cat !== '全部' ? projected.filter(x => x.category === cat) : projected;
+  if (offline) {
+    const routeExp = {};
+    for (const item of projected) routeExp[item.category] = (routeExp[item.category] || 0) + (Number(item.amount) || 0);
+    st.route.exp = routeExp;
+  }
+  if (cat && cat !== '全部') {
+    const amount = st.list.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+    st.summary = { total: st.list.length, amount, byCategory: { [cat]: amount }, cached: !!r.fetched_at && !navigator.onLine };
+  } else {
+    const queue = offline ? await offline.listQueue(route.id) : [];
+    const added = queue.filter(x => x.type === 'expense.create').reduce((s, x) => s + (Number(x.payload.amount) || 0), 0);
+    const removed = queue.filter(x => x.type === 'expense.delete').reduce((s, x) => s + (Number(x.payload.amount) || 0), 0);
+    const byCategory = { ...(r.byCategory || {}) };
+    queue.filter(x => x.type === 'expense.create').forEach(x => { byCategory[x.payload.category] = (byCategory[x.payload.category] || 0) + (Number(x.payload.amount) || 0); });
+    queue.filter(x => x.type === 'expense.delete').forEach(x => { byCategory[x.payload.category] = Math.max(0, (byCategory[x.payload.category] || 0) - (Number(x.payload.amount) || 0)); });
+    st.summary = { total: Math.max(0, Number(r.total || 0) + queue.filter(x => x.type === 'expense.create').length - queue.filter(x => x.type === 'expense.delete').length), amount: Math.max(0, Number(r.amount || 0) + added - removed), byCategory, cached: !!r.fetched_at && !navigator.onLine };
+  }
   return st;
 }
 
@@ -65,6 +137,7 @@ async function loadExpenses(route, catFilter) {
 export async function renderLedgerTab(container, route, onChanged) {
   st.route = route;
   st.onChanged = onChanged || null;
+  watchOfflineSync();
   container.innerHTML = '<div class="empty">加载流水…</div>';
   try {
     /* 必须按当前路线强制加载同行人：名单是模块级状态，条件加载会导致跨路线串线 */
@@ -131,10 +204,13 @@ function ledgerRow(e, cur) {
   else if (parts.length === 1) share = '仅 ' + esc(parts[0].name) + ' 承担';
   else if (parts.length === st.travelers.length && st.travelers.length) share = parts.length + ' 人平分';
   else share = parts.length + ' 人分摊 · 非全员';
-  return `<div class="led" data-exp="${esc(e.id)}">
+  const pendingBadge = e.pending
+    ? `<span class="pill ${e.pending_status === 'inflight' ? 'pill-syncing' : (e.pending_status === 'failed' ? 'pill-rejected' : 'pill-pending')}">${e.pending_status === 'inflight' ? '同步中' : (e.pending_status === 'failed' ? '需处理' : '待同步')}</span>`
+    : '';
+  return `<div class="led${e.pending ? ' pending' : ''}" data-exp="${esc(e.id)}"${e.pending ? ' data-pending="1"' : ''}>
     <span class="sw" style="background:${COLORS[e.category] || '#94a3b8'}"></span>
     <div class="t">
-      <div class="n">${esc(e.title || e.category)}</div>
+      <div class="n">${esc(e.title || e.category)} ${pendingBadge}</div>
       <div class="m">
         <span>${esc(e.category)}</span><span>·</span>
         <span>${payer ? esc(payer.name) + ' 付' : '未指定付款人'}</span>
@@ -160,7 +236,32 @@ function bindLedger(container, hasRows) {
   });
   if (!hasRows) return;
   container.querySelectorAll('.led[data-exp]').forEach(el => {
-    el.onclick = () => openExpenseSheet(st.route, el.dataset.exp, st.onChanged);
+    el.onclick = async () => {
+      if (el.dataset.pending === '1') {
+        const offline = getOfflineEngine();
+        if (!offline) return toast('离线存储不可用，无法安全处理待同步流水');
+        const item = st.list.find(x => String(x.id) === el.dataset.exp);
+        const ops = await offline.listQueue(st.route.id);
+        const op = ops.find(x => String(x.client_id) === String(el.dataset.exp));
+        if (op && op.type === 'expense.update') {
+          if (!confirm('撤销这笔尚未同步的修改？（恢复为服务器上的当前内容）')) return;
+          try {
+            await offline.removeQueued(op.op_id);
+            toast('已撤销本地修改');
+            await refreshAfterChange();
+          } catch (e) { toast('撤销失败：' + e.message); }
+          return;
+        }
+        if (!confirm('删除这笔尚未同步的流水？')) return;
+        try {
+          await offline.enqueueDelete(st.route.id, el.dataset.exp, item);
+          toast('已从本机待同步列表移除');
+          await refreshAfterChange();
+        } catch (e) { toast('删除失败：' + e.message); }
+        return;
+      }
+      el.dataset.exp && openExpenseSheet(st.route, el.dataset.exp, st.onChanged);
+    };
   });
 }
 
@@ -394,7 +495,9 @@ async function saveExpense() {
   const route = st.route;
   const amount = parseFloat(st.draft.amount);
   if (!(amount > 0)) return toast('请填写大于 0 的金额');
+  const clientId = st.editingId ? null : createClientId();
   const payload = {
+    ...(clientId ? { id: clientId } : {}),
     spent_on: st.draft.spent_on || '',
     category: st.draft.category,
     amount,
@@ -404,13 +507,45 @@ async function saveExpense() {
     parts: st.draft.parts
   };
   const base = '/routes/' + encodeURIComponent(route.id) + '/expenses';
+  const offline = getOfflineEngine();
   try {
     if (st.editingId) {
-      await api.patch(base + '/' + encodeURIComponent(st.editingId), payload);
-      toast('已保存');
+      /* 阶段 2：编辑已同步流水 —— 在线直发（携带 base_updated_at 乐观锁）；
+       * 网络类失败 → 落队列离线编辑；409 编辑冲突 → 以队列冲突态进入二选一面板（不静默覆盖）。 */
+      const cached = offline ? await offline.getExpensesCache(route.id) : null;
+      const cachedRow = cached && (cached.list || []).find(x => String(x.id) === String(st.editingId));
+      const baseAt = Number(cachedRow && cachedRow.updated_at) || 0;
+      if (!navigator.onLine) {
+        if (!offline) return toast('本机离线存储不可用，无法安全保存待同步修改；请恢复网络后重试');
+        await offline.enqueueUpdate(route.id, st.editingId, payload, baseAt);
+        toast('已离线保存修改，恢复网络后将自动同步');
+      } else {
+        try {
+          const rec = await api.patch(base + '/' + encodeURIComponent(st.editingId), baseAt ? { ...payload, base_updated_at: baseAt } : payload);
+          if (offline) await offline.upsertCachedExpense(route.id, rec);
+          toast('已保存');
+        } catch (e) {
+          if (e && e.status === 409 && e.code === 'EDIT_CONFLICT' && offline) {
+            await offline.enqueueUpdate(route.id, st.editingId, payload, baseAt);
+            await offline.syncNow();
+            return toast('该笔已在其他端被修改，请在「同步队列」中选择保留哪一侧');
+          }
+          if (!(e && isNetworkError(e)) || !offline) throw e;
+          await offline.enqueueUpdate(route.id, st.editingId, payload, baseAt);
+          toast('网络异常，修改已保存到本机待同步队列');
+        }
+      }
     } else {
-      await api.post(base, payload);
-      toast(`已记一笔 ${fmtMoney(amount, route.currency || 'CNY')}`);
+      try {
+        const rec = await api.post(base, payload);
+        if (offline) await offline.upsertCachedExpense(route.id, rec);
+        toast(`已记一笔 ${fmtMoney(amount, route.currency || 'CNY')}`);
+      } catch (e) {
+        if (!isNetworkError(e)) throw e;
+        if (!offline) throw new Error('本机离线存储不可用，无法安全保存待同步流水；请恢复网络后重试');
+        /* clientId 在第一次在线尝试前已生成，失败入队沿用同一个 id，保证重放幂等。 */
+        await offline.enqueueExpense(route.id, payload);
+      }
     }
   } catch (e) {
     return toast(e.message);
@@ -421,9 +556,12 @@ async function saveExpense() {
 
 async function deleteExpense() {
   if (!st.editingId) return;
+  if (!navigator.onLine) return toast('离线阶段暂不支持删除已同步流水；原数据未改变');
   if (!confirm('删除这笔流水？')) return;
   try {
     await api.del('/routes/' + encodeURIComponent(st.route.id) + '/expenses/' + encodeURIComponent(st.editingId));
+    const offline = getOfflineEngine();
+    if (offline) await offline.removeCachedExpense(st.route.id, st.editingId);
   } catch (e) { return toast(e.message); }
   toast('已删除');
   maskClose('expMask');

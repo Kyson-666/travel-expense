@@ -1,7 +1,7 @@
 /* 测试编排：一条命令跑全部测试（本地与 CI 通用）
  * 1. 起后端（隔离 DATA_DIR + 种子数据），注入注册/登录验证码
  * 2. 顺序执行主回归 + 深测（共享同一服务，数据前后衔接）
- * 3. 停服务，执行 9 个自托管冒烟（预算/导出导入/分享/分享导出图片/备份/逐笔流水/AA/AI/按天行程/CORS预检）
+ * 3. 停服务，执行 12 个自托管冒烟与离线引擎单测
  * 运行：node tests/run-all.js
  * 退出码：0=全绿 1=有失败 2=异常
  */
@@ -85,6 +85,9 @@ async function main() {
   runStep('冒烟 smoke-ai（AI 规划 / 调整）', () => runNode(path.join(__dirname, 'smoke-ai.test.js'), {}, ROOT));
   runStep('冒烟 smoke-days（行程按天：景点/住宿）', () => runNode(path.join(__dirname, 'smoke-days.test.js'), {}, ROOT));
   runStep('冒烟 smoke-cors（跨域预检 / 写方法白名单）', () => runNode(path.join(__dirname, 'smoke-cors.test.js'), {}, ROOT));
+  runStep('冒烟 smoke-fixes（排序权威 / 币种不变量 / 导出导入往返 / 去重键 / 分享含结算）', () => runNode(path.join(__dirname, 'smoke-fixes.test.js'), {}, ROOT));
+  runStep('冒烟 smoke-offline（离线幂等 / 批量同步 / 降级 / 拒绝 / 幂等删除）', () => runNode(path.join(__dirname, 'smoke-offline.test.js'), {}, ROOT));
+  runStep('单测 offline-engine（MemoryAdapter / 退避 / 401 保全 / 幂等投影 / 本地消解）', () => runNode(path.join(__dirname, 'offline-engine.test.js'), {}, ROOT));
 
   console.log('\n══════════════════════════════════');
   let fail = 0;

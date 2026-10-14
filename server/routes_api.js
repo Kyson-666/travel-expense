@@ -24,7 +24,10 @@ const ROUTE_COLS = dbModule.ROUTE_COLS;
 const CSV_HEAD = ['name', 'year', 'type', 'daterange', 'start_date', 'end_date', 'days', 'people', 'dest',
   'currency', 'budget_total', 'budget_daily'].concat(dbModule.EXP_KEYS, ['scenic', 'hotel', 'notes']);
 
-/* 查询本人+种子（含个人隐藏开关过滤种子）；返回全量行（统计用） */
+/* 查询本人+种子（含个人隐藏开关过滤种子）；返回全量行（统计用）。
+ * 排序权威在服务端：按出发时间倒序（routeStartMs）。前端不得再对分页结果二次排序，
+ * 否则会出现「页内按出发日排、页间按年+创建时间切」的跨页顺序错乱。
+ * Array.prototype.sort 稳定 → 同出发时间沿用 SQL 的 year DESC, created_at DESC 次序。 */
 function queryRoutes(userId, { year, q, hideSeed }) {
   const args = [userId];
   let where = `(owner_id = ?`;
@@ -38,7 +41,8 @@ function queryRoutes(userId, { year, q, hideSeed }) {
     where += ` AND (name LIKE ? ESCAPE '\\' OR dest LIKE ? ESCAPE '\\' OR scenic LIKE ? ESCAPE '\\')`;
     const like = `%${escapeLike(q)}%`; args.push(like, like, like);
   }
-  return db().prepare(`SELECT ${ROUTE_COLS} FROM routes WHERE ${where} ORDER BY year DESC, created_at DESC`).all(...args);
+  return db().prepare(`SELECT ${ROUTE_COLS} FROM routes WHERE ${where} ORDER BY year DESC, created_at DESC`).all(...args)
+    .sort((a, b) => dbModule.routeStartMs(b) - dbModule.routeStartMs(a));
 }
 
 /* 列表（分页）：返回 {rows, total, page, pageSize} */
@@ -216,10 +220,25 @@ async function handle(req, res, url, body) {
     return ok(res, true);
   }
 
-  /* GET /api/routes/export?fmt=csv|json — 个人导出（仅本人数据，不含示例） */
+  /* GET /api/routes/export?fmt=csv|json — 个人导出（仅本人数据，不含示例）
+   * JSON 为**完整备份**：除路线字段外，还含按天行程（day_plans）、同行人（travelers）
+   * 与逐笔流水（expenses，含分摊人），可与 /import 往返还原。
+   * CSV 仍为 9 类汇总口径（Excel 友好），不含流水明细。 */
   if (rest === '/export' && method === 'GET') {
     const rows = queryRoutes(user.id, { year: query.year || '', q: '', hideSeed: true });
-    if (query.fmt === 'json') return ok(res, { count: rows.length, routes: rows.map(r => dbModule.routeToJson(r)) });
+    if (query.fmt === 'json') {
+      return ok(res, {
+        count: rows.length,
+        routes: rows.map(r => {
+          const j = dbModule.routeToJson(r);
+          const ledger = dbModule.exportLedger(r.id);
+          j.day_plans = dbModule.listRouteDays(r.id);
+          j.travelers = ledger.travelers;
+          j.expenses = ledger.expenses;
+          return j;
+        })
+      });
+    }
     const head = CSV_HEAD;
     const data = rows.map(r => {
       const j = dbModule.routeToJson(r);
@@ -236,16 +255,31 @@ async function handle(req, res, url, body) {
     return res.end(toCsv(head, data));
   }
 
-  /* POST /api/routes/import — 个人 JSON 导入（新增为本人路线，仅白名单字段，按名称+年份+目的地去重） */
+  /* POST /api/routes/import — 个人 JSON 导入（新增为本人路线，仅白名单字段）
+   * 去重键：名称 + 年份 + 目的地 + 起止日期（**不再只用名称+年份+目的地**，
+   * 否则同名同年同目的地的不同行程会被误判重复而静默跳过）。
+   * 若条目携带 travelers / expenses（新版完整备份），则一并还原流水与同行人。 */
   if (rest === '/import' && method === 'POST') {
     if (!body || !Array.isArray(body.routes)) return fail(res, 400, '格式应为 { routes: [...] }');
     if (body.routes.length > 2000) return fail(res, 400, '单次导入上限 2000 条');
-    let created = 0, skipped = 0, duplicates = 0;
+    let created = 0, skipped = 0, duplicates = 0, travelersRestored = 0, expensesRestored = 0;
     const errors = [];
-    /* 构建已存在的 key 集合用于去重（name|year|dest） */
+    /* 起止日期：与 db.bind() 同口径（优先结构化字段，回退 daterange 文本解析），
+     * 保证「导入条目」与「库中已有行」的去重键可比。 */
+    const effDates = (o) => {
+      const dr = dbModule.parseDateRange(o.daterange, o.year);
+      return {
+        start: String(o.start_date || '').trim() || dr.start || '',
+        end: String(o.end_date || '').trim() || dr.end || ''
+      };
+    };
+    const dedupKey = (name, year, dest, start, end) =>
+      [name, year, dest, start, end].map(v => String(v == null ? '' : v).trim()).join('|');
+
+    /* 构建已存在的 key 集合用于去重 */
     const existing = new Set(
-      db().prepare('SELECT name, year, dest FROM routes WHERE owner_id = ?').all(user.id)
-        .map(r => `${r.name || ''}|${r.year || ''}|${r.dest || ''}`)
+      db().prepare('SELECT name, year, dest, start_date, end_date FROM routes WHERE owner_id = ?').all(user.id)
+        .map(r => dedupKey(r.name, r.year, r.dest, r.start_date, r.end_date))
     );
     const seenInBatch = new Set();
     body.routes.forEach((item, i) => {
@@ -253,12 +287,14 @@ async function handle(req, res, url, body) {
         skipped++; errors.push('第 ' + (i + 1) + ' 条缺少名称，已跳过');
         return;
       }
-      const key = `${String(item.name).trim()}|${String(item.year || '').trim()}|${String(item.dest || '').trim()}`;
+      const d = effDates(item);
+      const key = dedupKey(item.name, item.year, item.dest, d.start, d.end);
       if (existing.has(key) || seenInBatch.has(key)) {
         duplicates++;
         return;
       }
       seenInBatch.add(key);
+      const hasLedger = Array.isArray(item.expenses) && item.expenses.length > 0;
       const clean = {
         name: String(item.name), year: String(item.year || ''), type: String(item.type || '自由行'),
         daterange: String(item.daterange || ''), start_date: String(item.start_date || ''), end_date: String(item.end_date || ''),
@@ -266,14 +302,20 @@ async function handle(req, res, url, body) {
         dest: String(item.dest || ''), scenic: String(item.scenic || ''), hotel: String(item.hotel || ''),
         day_plans: Array.isArray(item.day_plans) ? item.day_plans : undefined,
         currency: String(item.currency || 'CNY'), budget_total: dbModule.num(item.budget_total), budget_daily: dbModule.num(item.budget_daily),
-        exp: (item.exp && typeof item.exp === 'object') ? item.exp : {},
+        /* 携带完整流水时，不再由 exp 生成「期初流水」——否则会与还原的流水重复计账 */
+        exp: hasLedger ? {} : ((item.exp && typeof item.exp === 'object') ? item.exp : {}),
         notes: String(item.notes || '')
       };
-      dbModule.insertRoute(user.id, clean, false);
+      const rec = dbModule.insertRoute(user.id, clean, false);
+      if (rec && rec.id && (Array.isArray(item.travelers) || Array.isArray(item.expenses))) {
+        const r = dbModule.importLedger(rec.id, user.id, item.travelers, item.expenses);
+        travelersRestored += r.travelers;
+        expensesRestored += r.expenses;
+      }
       existing.add(key);
       created++;
     });
-    return ok(res, { created, skipped, duplicates, errors });
+    return ok(res, { created, skipped, duplicates, travelers: travelersRestored, expenses: expensesRestored, errors });
   }
 
   /* /:id 详情/更新/删除 + 子资源：share（只读分享）/ travelers / expenses / settle */
@@ -283,6 +325,24 @@ async function handle(req, res, url, body) {
     const sub = segs[1] || '';
     const subId = segs[2] || '';
     if (!id) return fail(res, 404, '路线不存在');
+    /* 离线同步必须能把「路线已删除」作为逐笔结果返回，而不是整请求 404。
+     * 限定仍需已登录；syncExpenseOps 会验证路线/owner，并且不暴露任何已有记录。 */
+    if (sub === 'expenses' && subId === 'sync' && method === 'POST') {
+      const row = findVisible(id, user.id);
+      if (row && row.is_seed && user.role !== 'admin') {
+        return fail(res, 403, '示例路线为系统数据，仅可查看', { code: 'FORBIDDEN' });
+      }
+      const canWrite = row && (row.owner_id === user.id || user.role === 'admin');
+      if (!canWrite) {
+        const ops = body && Array.isArray(body.ops) ? body.ops : [];
+        if (ops.length > 200) return fail(res, 400, '单次最多同步 200 笔', { code: 'OPS_TOO_MANY' });
+        return ok(res, { server_time: Date.now(), results: ops.map(op => ({
+          op_id: String((op && op.op_id) || '').slice(0, 80), status: 'rejected',
+          code: 'ROUTE_NOT_FOUND', message: '路线不存在或无权访问'
+        })) });
+      }
+      /* 进入标准资源分发（继续执行下方 isOwn / seedReadonly 门禁） */
+    }
     const row = findVisible(id, user.id);
     if (!row) return fail(res, 404, '路线不存在');
 
@@ -365,8 +425,17 @@ async function handle(req, res, url, body) {
           return ok(res, dbModule.listExpenses(id, {
             category: query.category || '', payer: query.payer || '',
             from: query.from || '', to: query.to || '',
+            updatedSince: query.updated_since || 0,
             page: query.page, pageSize: query.pageSize
           }));
+        }
+        if (method === 'POST' && subId === 'sync') {
+          if (!body || !Array.isArray(body.ops)) return fail(res, 400, '格式应为 { ops: [...] }', { code: 'INVALID_OPS' });
+          if (body.ops.length > 200) return fail(res, 400, '单次最多同步 200 笔', { code: 'OPS_TOO_MANY' });
+          const result = dbModule.syncExpenseOps(id, row.owner_id, body.ops);
+          const accepted = result.results.filter(x => x.status === 'accepted' || x.status === 'duplicate' || x.status === 'degraded').length;
+          if (body.ops.length) dbModule.audit(user.id, 'sync_expenses', 'routes', id, `离线同步 ${body.ops.length} 笔操作，成功 ${accepted} 笔`, ip);
+          return ok(res, result);
         }
         if (method === 'POST' && !subId) {
           if (!body || typeof body !== 'object') return fail(res, 400, '参数不正确');
@@ -387,14 +456,21 @@ async function handle(req, res, url, body) {
           return ok(res, rec);
         }
         if (method === 'DELETE' && subId) {
-          if (!dbModule.deleteExpense(subId, id)) return fail(res, 404, '流水不存在');
-          dbModule.audit(user.id, 'delete_expense', 'routes', id, '删除一笔流水', ip);
-          return ok(res, true);
+          const deleted = dbModule.deleteExpense(subId, id);
+          if (deleted) dbModule.audit(user.id, 'delete_expense', 'routes', id, '删除一笔流水', ip);
+          return ok(res, { deleted: deleted ? 1 : 0 });
         }
         return fail(res, 404, '接口不存在');
       } catch (e) {
         /* 校验类错误统一 400，并回传机器可读 code（避免落到全局 500） */
-        if (e && e.code && /^(INVALID_|DUPLICATE_)/.test(e.code)) return fail(res, 400, e.message, { code: e.code });
+        /* 离线编辑乐观锁冲突：409 并附服务端当前记录（冲突处置面板「采用服务端」直接可用）。 */
+        if (e && e.code === 'EDIT_CONFLICT') {
+          return fail(res, 409, e.message, { code: e.code, server: e.server || null });
+        }
+        if (e && e.code && (/^(INVALID_|DUPLICATE_)/.test(e.code) || e.code === 'ID_CONFLICT' || e.code === 'OPS_TOO_MANY')) {
+          const status = e.code === 'ID_CONFLICT' ? 409 : 400;
+          return fail(res, status, e.message, { code: e.code });
+        }
         throw e;
       }
     }

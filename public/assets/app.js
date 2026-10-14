@@ -1,7 +1,8 @@
 /* app.js — 工作台（路线列表 + 年度统计 + 路线表单 + 个人中心） */
-import { store, toast, api, navigate, esc, fmt, fmtMoney, CATS, parseStart, parseDatesFromRange, fmtTime } from './api.js';
+import { store, toast, api, navigate, esc, fmt, fmtMoney, CATS, parseDatesFromRange, fmtTime, getServerUrl, isNetworkError } from './api.js';
 import { COLORS, totalOf, donut, trendBar } from './charts.js';
 import * as ledger from './ledger.js';
+import { getOfflineEngine } from './offline.js';
 
 let routes = [];
 let searchTimer = null;
@@ -12,37 +13,53 @@ let state = { filterYear: 'all', search: '', curId: null, detailId: null, detail
  * 未捕获会连带中断调用方的 Promise.all，导致工作台整体渲染失败。 */
 export function loadYears() {
   const qs = store.hideSeed ? '?hideSeed=1' : '';
+  const offline = getOfflineEngine();
   return api.get('/routes/years' + qs)
-    .then(data => { state.years = (data && data.years) || []; })
-    .catch(e => {
-      if (e && e.status === 401) { navigate('/login'); return; }
-      /* 年份接口失败不应阻断主体：降级为「仅全部」并保留既有列表能力 */
-      state.years = [];
+    .then(async data => {
+      state.years = (data && data.years) || [];
+      if (offline) await offline.setMeta('years:' + qs, state.years);
+    })
+    .catch(async e => {
+      if (e && e.status === 401 && !isNetworkError(e)) { navigate('/login'); return; }
+      state.years = offline ? ((await offline.getMeta('years:' + qs)) || []) : [];
     });
 }
 
-function refreshRoutes(page) {
+function routeQuery(page) {
   const qs = new URLSearchParams();
   if (store.hideSeed) qs.set('hideSeed', '1');
   if (state.filterYear && state.filterYear !== 'all') qs.set('year', state.filterYear);
-  /* 搜索改为服务端过滤，与统计口径一致（列表/年份/搜索/统计同源） */
   if (state.search.trim()) qs.set('q', state.search.trim());
   qs.set('page', String(page || state.page || 1));
   qs.set('pageSize', String(state.pageSize || 50));
-  return api.get('/routes' + (qs.toString() ? '?' + qs.toString() : ''));
+  return qs.toString();
+}
+function refreshRoutes(page) {
+  const qs = routeQuery(page);
+  return api.get('/routes' + (qs ? '?' + qs : ''));
 }
 
 export async function loadRoutes() {
+  const offline = getOfflineEngine();
+  const qs = routeQuery(state.page);
   try {
     const data = await refreshRoutes(state.page);
     routes = data.list || [];
     state.total = data.total || 0;
     state.pageSize = data.pageSize || state.pageSize;
+    if (offline) await offline.saveRouteCache(qs, data);
   } catch (e) {
-    if (e.status === 401) { navigate('/login'); return; }
-    toast(e.message);
-    routes = [];
-    state.total = 0;
+    if (e.status === 401 && !isNetworkError(e)) { navigate('/login'); return; }
+    const cached = offline ? await offline.getRouteCache(qs) : null;
+    if (cached && cached.data) {
+      routes = cached.data.list || [];
+      state.total = cached.data.total || routes.length;
+      state.pageSize = cached.data.pageSize || state.pageSize;
+    } else {
+      toast(e.message);
+      routes = [];
+      state.total = 0;
+    }
   }
 }
 
@@ -65,13 +82,6 @@ async function reloadAfterMutation() {
       renderDetailTab();
     }
   }
-}
-
-/* 排序用起始时间：优先结构化 start_date，回退自由文本解析 */
-function startMs(r) {
-  if (r.start_date) { const t = new Date(r.start_date + 'T00:00:00'); if (!isNaN(t.getTime())) return t.getTime(); }
-  const d = parseStart(r.daterange, r.year);
-  return d ? d.getTime() : 0;
 }
 
 /* ---------- 工作台 ---------- */
@@ -176,15 +186,14 @@ function miniBar(r) {
 
 function renderRoutes() {
   const grid = document.getElementById('routeGrid');
-  /* 列表已由服务端按 year+q 过滤并分页，直接渲染返回结果（与统计口径一致） */
+  /* 列表已由服务端按 year+q 过滤、按出发时间倒序排序并分页。
+   * 此处**不得再排序**：对已分页结果二次排序会导致「页内按出发日排、页间按年+创建时间切」，
+   * 跨页顺序不自洽。排序权威唯一在服务端（routes_api.js queryRoutes → db.routeStartMs）。 */
   const list = routes;
   if (!list.length) {
     grid.innerHTML = '<div class="empty">暂无路线，点「新增路线」开始记录吧 ✈</div>';
     return;
   }
-  list.sort((a, b) => {
-    return startMs(b) - startMs(a);
-  });
   grid.innerHTML = list.map(r => {
     const t = totalOf(r);
     const per = perOf(r);
@@ -316,7 +325,12 @@ export async function renderStats() {
 
   let summary;
   try { summary = await api.get('/routes/stats/summary' + (qs ? '?' + qs : '')); }
-  catch (e) { toast('统计加载失败：' + e.message); return; }
+  catch (e) {
+    /* 离线期不弹红条：顶部离线状态条已表达该状态，且「请检查证书」类文案在用户明知离线时
+     * 属于误导与噪音；零散网络失败（在线但请求失败）仍照常提示。 */
+    if (!isNetworkError(e) || navigator.onLine) toast('统计加载失败：' + e.message);
+    return;
+  }
   if (!summary) return;
 
   const home = store.site.home_currency || 'CNY';
@@ -1130,7 +1144,11 @@ function renderOverview(r, body, seedOnly) {
       try {
         const res = await api.post('/routes/' + encodeURIComponent(r.id) + '/share');
         if (!res || !res.token) throw new Error('生成失败');
-        const url = location.origin + '/share/' + res.token;
+        /* 分享链接必须基于「用户配置/内置的服务器地址」，不能用 location.origin：
+         * 安卓 APP 的 WebView 源是 http://localhost，用 location.origin 会生成
+         * http://localhost/share/xxx —— 这个地址无法分享给他人（浏览器同源时二者一致，故只在 APP 内暴露）。 */
+        const base = getServerUrl() || location.origin;
+        const url = base + '/share/' + res.token;
         sb.innerHTML = '<span class="k">分享</span><span class="v" style="font-size:12px"><span class="mono" style="cursor:pointer;word-break:break-all" title="点击复制" id="shareUrl">' + esc(url) + '</span></span>';
         const su = sb.querySelector('#shareUrl');
         su.onclick = () => {

@@ -9,3 +9,6 @@ data/*.db-shm
 data/*.db-wal
 # 本地临时测试目录
 .te_test/
+# 本地交接 / 审查文档（含本机路径与私域信息，不入公开仓库）
+CONTEXT-FOR-AGENTS.md
+REVIEW-2026-10-14.md

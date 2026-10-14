@@ -253,10 +253,12 @@ const server = http.createServer(async (req, res) => {
       const MIME = {
         '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
         '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
+        '.webmanifest': 'application/manifest+json; charset=utf-8',
         '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon'
       };
-      /* 缓存策略：index.html 不缓存（确保更新即时生效）；JS/CSS 等静态资源缓存 5 分钟 */
-      const cacheControl = ext === '.html' ? 'no-cache' : 'public, max-age=300';
+      /* index 与 SW/manifest 不缓存，确保页面和缓存策略可立即更新；其他静态资源短缓存。 */
+      const cacheControl = ['.html', '.webmanifest'].includes(ext) || url.pathname === '/sw.js'
+        ? 'no-cache' : 'public, max-age=300';
       const data = fs.readFileSync(f);
       res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': cacheControl });
       accessLog(req, res, startMs, 200);
@@ -328,6 +330,37 @@ function renderSharePage(r) {
   const expRows = dbModule.EXP_KEYS
     .filter(c => dbModule.num(r.exp[c]) > 0)
     .map(c => `<tr><td class="k">${esc(c)}</td><td>${money(r.exp[c], r.currency)}</td></tr>`).join('');
+
+  /* AA 结算方案：有同行人时随分享页一并展示，方便旅行结束后在群里对账。
+   * 口径与详情页「结算」页签完全一致（同一 dbModule.settle），不做二次加工。
+   * 结算失败不阻断分享主体（分享页仍需可用）。 */
+  let settleHtml = '';
+  try {
+    const s = dbModule.settle(r.id);
+    if (s && s.rows && s.rows.length) {
+      const body = s.rows.map(x => {
+        const cls = x.net > 0.005 ? 'recv' : (x.net < -0.005 ? 'pay' : '');
+        /* 符号在币种之前（−¥3,450），与详情页「结算」页签一致 */
+        const sign = x.net > 0.005 ? '+' : (x.net < -0.005 ? '−' : '');
+        return `<tr><td class="k">${esc(x.name)}${x.is_self ? ' <span class="me">本人</span>' : ''}</td>` +
+          `<td>${money(x.paid, r.currency)}</td><td>${money(x.owed, r.currency)}</td>` +
+          `<td class="${cls}">${sign}${money(Math.abs(x.net), r.currency)}</td></tr>`;
+      }).join('');
+      const transfers = s.transfers.length
+        ? s.transfers.map(x => `<div class="tf"><span>${esc(x.from_name)}</span><span class="arrow">→</span><span>${esc(x.to_name)}</span><b>${money(x.amount, r.currency)}</b></div>`).join('')
+        : '<div class="tf tf-clear">已结清，无需转账</div>';
+      const caliber = '差额为正=应收（他人欠我），为负=应付。' +
+        (s.summary.unassigned > 0 ? `未指定付款人的 ${money(s.summary.unassigned, r.currency)} 不参与结算。` : '');
+      settleHtml = `<div class="exp"><h2>AA 结算方案</h2>
+        <table class="settle"><thead><tr><th>同行人</th><th>实付</th><th>应负担</th><th>差额</th></tr></thead>
+        <tbody>${body}</tbody></table>
+        <div class="tf-title">最少转账方案（${s.transfers.length} 笔）</div>
+        ${transfers}
+        <div class="caliber">${caliber}</div>
+      </div>`;
+    }
+  } catch (e) { /* 结算不可用时静默跳过该区块 */ }
+
   return `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -352,6 +385,20 @@ function renderSharePage(r) {
   .export-btn:hover{background:#3a7bc8}
   .export-btn:disabled{background:#aaa;cursor:not-allowed}
   .export-btn svg{width:16px;height:16px}
+  /* AA 结算方案（分享页）：与详情页「结算」页签同口径 —— 绿为应收、红为应付 */
+  .settle th{text-align:right;font-weight:500;color:#6b7d79;font-size:12px;padding:4px}
+  .settle th:first-child{text-align:left}
+  .settle td{text-align:right;white-space:nowrap}
+  .settle td.k{text-align:left;white-space:normal;width:auto}
+  .recv{color:#2e7d5b;font-weight:600}
+  .pay{color:#d64545;font-weight:600}
+  .me{display:inline-block;background:#e8f4ef;color:#3a7d64;border-radius:6px;padding:0 5px;font-size:11px;margin-left:4px}
+  .tf-title{margin-top:14px;font-size:13px;color:#6b7d79}
+  .tf{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-top:6px;background:#f7fbfa;border-radius:9px;font-size:13px}
+  .tf b{margin-left:auto;color:#1f2d2b}
+  .tf .arrow{color:#9db4ae}
+  .tf-clear{justify-content:center;color:#6b7d79}
+  .caliber{margin-top:10px;color:#9db4ae;font-size:12px;line-height:1.6}
 </style></head><body><div class="wrap">
   <div class="card" id="shareCard">
     <h1>${esc(r.name)}</h1>
@@ -361,6 +408,7 @@ function renderSharePage(r) {
     <div class="exp"><h2>花费明细（${t > 0 ? money(t, r.currency) : '暂无'}）</h2>
       ${expRows ? `<table>${expRows}</table>` : '<div class="pre">暂无花费数据</div>'}
     </div>
+    ${settleHtml}
     ${r.notes ? `<div class="exp"><h2>备注</h2><div class="pre">${esc(r.notes)}</div></div>` : ''}
   </div>
   <div class="export-bar">

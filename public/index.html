@@ -6,6 +6,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>旅行路线 · 经费台</title>
 <link rel="stylesheet" href="/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#15a98c">
 </head>
 <body>
 <header>
@@ -48,6 +50,7 @@
     </div>
   </div>
 </header>
+<div id="offlineBar" class="offline-bar" role="status" aria-live="polite"></div>
 
 <main id="view" style="min-height:calc(100vh - 130px)">
   <div class="wrap"><div class="empty">加载中…</div></div>
@@ -69,7 +72,7 @@
       </div>
       <div class="field"><label>天数 <span class="hint">自动计算</span></label><input id="f_days" placeholder="自动" readonly style="background:#f5f7f6;cursor:not-allowed"></div>
       <div class="field"><label>同行人数 <span class="hint">用于算人均</span></label><input id="f_people" placeholder="2" inputmode="numeric"></div>
-      <div class="field"><label>币种</label><select id="f_currency"></select></div>
+      <div class="field"><label>币种 <span class="hint">改后该路线流水币种同步更新</span></label><select id="f_currency"></select></div>
       <div class="field"><label>总预算 <span class="hint">本位币近似</span></label><input id="f_budget_total" placeholder="0" inputmode="decimal"></div>
       <div class="field"><label>日均预算</label><input id="f_budget_daily" placeholder="0" inputmode="decimal"></div>
       <div class="field"><label>主要目的地</label><input id="f_dest" placeholder="青海、甘肃"></div>

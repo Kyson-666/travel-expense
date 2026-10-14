@@ -3,6 +3,28 @@ import { store, toast, api, navigate, fetchMe, applyAuth, renderHeader, getServe
 import { initAuth, renderLogin, renderRegister } from './auth.js';
 import { loadRoutes, loadYears, renderWorkbench, renderStats, renderProfile, bindFormEvents } from './app.js';
 import { renderAdmin, bindAdminEvents } from './admin.js';
+import { initOffline } from './offline.js';
+import { mountOfflineUI, mountInstallGuide } from './offline-ui.js';
+
+function registerServiceWorker() {
+  /* Capacitor 安卓壳由原生 BridgeWebViewClient 提供资源且走原生热更新；不注册 SW，避免旧缓存掩盖热更新。 */
+  if (window.Capacitor || window.CapacitorNative || window.__CAPACITOR__) return;
+  if (!('serviceWorker' in navigator)) return;
+  const register = () => {
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+      if (reg.waiting) toast('有新版本可用，请刷新页面');
+      reg.addEventListener('updatefound', () => {
+        const worker = reg.installing;
+        if (worker) worker.addEventListener('statechange', () => {
+          if (worker.state === 'installed' && navigator.serviceWorker.controller) toast('有新版本可用，请刷新页面');
+        });
+      });
+    }).catch(() => { /* SW 不可用不得影响在线/离线记账引擎 */ });
+  };
+  if (document.readyState === 'complete') register();
+  else window.addEventListener('load', register, { once: true });
+}
+
 
 async function guard() {
   const route = location.hash || '#/workbench';
@@ -80,9 +102,14 @@ async function init() {
   bindHeaderEvents();
   bindFormEvents();
   bindAdminEvents();
+  const offline = await initOffline();
+  if (offline) mountOfflineUI(offline);
+  mountInstallGuide();
+  registerServiceWorker();
 
   window.addEventListener('hashchange', render);
   await render();
+  /* 会话在离线启动时可能仅由 localStorage 恢复；登录接口成功后 api.js 会发 te:auth，触发队列续传。 */
 
   /* 心跳：每 5 分钟刷新在线状态 */
   setInterval(async () => {
@@ -94,6 +121,7 @@ function bindHeaderEvents() {
   document.getElementById('logoutBtn').onclick = async () => {
     try { await api.post('/auth/logout'); } catch (e) { /* ignore */ }
     store.user = null;
+    try { localStorage.removeItem('te_offline_user'); } catch (e) { /* ignore */ }
     renderHeader();
     navigate('/login');
   };

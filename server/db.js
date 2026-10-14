@@ -210,6 +210,7 @@ function initDb() {
   seedRoutes();
   migrateAggregatesToOpening();
   migrateDaysFromScenic();
+  enforceExpenseCurrencyInvariant();
   return db;
 }
 
@@ -273,6 +274,22 @@ function parseDateRange(dr, year) {
   m = dr.match(/(\d{1,2})[\/\-.](\d{1,2})/);
   if (m && year) return { start: isoDate(year, m[1], m[2]), end: isoDate(year, m[1], m[2]) };
   return { start: '', end: '' };
+}
+
+/* 排序键：路线的「出发时间」毫秒值（优先结构化 start_date，回退 daterange 文本解析）。
+ * 列表排序的**唯一权威**——前端不再二次排序，避免「页内按出发日排、页间按年+创建时间切」
+ * 导致跨页顺序不自洽。无日期可解析返回 0（排到最后）。 */
+function routeStartMs(row) {
+  if (row && row.start_date) {
+    const t = Date.parse(row.start_date + 'T00:00:00');
+    if (!Number.isNaN(t)) return t;
+  }
+  const r = parseDateRange(row && row.daterange, row && row.year);
+  if (r && r.start) {
+    const t = Date.parse(r.start + 'T00:00:00');
+    if (!Number.isNaN(t)) return t;
+  }
+  return 0;
 }
 
 /* 由起止日期生成显示用 daterange 文本（如 2026/06/17 - 2026/06/24） */
@@ -348,13 +365,28 @@ function getRouteRow(id) {
 
 /* 更新路线。
  * 注意：**不再写入 exp_\* 列** —— 9 类金额自 v1.1.0 起统一由流水派生（物化聚合），
- * 仅由 recomputeRouteAgg() 维护。否则「编辑路线」会凭空覆盖掉流水聚合值。 */
+ * 仅由 recomputeRouteAgg() 维护。否则「编辑路线」会凭空覆盖掉流水聚合值。
+ *
+ * 币种不变量：**同一路线的全部流水必须共享该路线的币种**。
+ * recomputeRouteAgg() / settle() 只对 amount 求和、不带币种维度，一旦路线币种与流水
+ * 快照币种分叉（改币种后不重算），两种币种的数字会被直接相加 → 金额静默错加。
+ * 故此处改币种时，在同一事务内把该路线全部流水的 currency 一并改写（金额数字不变，
+ * 仅重贴币种标签 —— 与用户此前在界面上看到的「按路线币种汇总」完全一致）。 */
 function updateRoute(id, userId, data) {
   const now = Date.now();
   const p = bind(data, userId, false, now, id);
-  db.prepare(`UPDATE routes SET year=@year, name=@name, daterange=@daterange, type=@type, days=@days, people=@people,
-    dest=@dest, scenic=@scenic, hotel=@hotel, start_date=@start_date, end_date=@end_date, currency=@currency, budget_total=@budget_total, budget_daily=@budget_daily, notes=@notes, updated_at=@updated_at
-    WHERE id=@id AND owner_id=@owner_id`).run(p);
+  const prev = db.prepare('SELECT currency FROM routes WHERE id = ?').get(id);
+  const currencyChanged = prev && (prev.currency || 'CNY') !== (p.currency || 'CNY');
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE routes SET year=@year, name=@name, daterange=@daterange, type=@type, days=@days, people=@people,
+      dest=@dest, scenic=@scenic, hotel=@hotel, start_date=@start_date, end_date=@end_date, currency=@currency, budget_total=@budget_total, budget_daily=@budget_daily, notes=@notes, updated_at=@updated_at
+      WHERE id=@id AND owner_id=@owner_id`).run(p);
+    if (currencyChanged) {
+      db.prepare('UPDATE expenses SET currency = ?, updated_at = ? WHERE route_id = ?')
+        .run(p.currency, now, id);
+    }
+  });
+  tx();
   /* 按天行程：day_plans 优先；否则 scenic/hotel 视作未分天单条；都没有则清空
    * （保持 PUT 整体覆盖语义；镜像 scenic/hotel 由 setRouteDays 统一回写） */
   const dayPlans = (Array.isArray(data.day_plans) || data.scenic !== undefined || data.hotel !== undefined)
@@ -642,7 +674,20 @@ function validateExpenseInput(routeId, data) {
 function insertExpense(routeId, ownerId, data) {
   const v = validateExpenseInput(routeId, data);
   const route = db.prepare('SELECT currency FROM routes WHERE id = ?').get(routeId);
-  const id = uid('e');
+  /* 客户端可选提供幂等 id（离线同步）；旧客户端不传或传入非法值时仍由服务端生成。 */
+  const requestedId = typeof data.id === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(data.id) ? data.id : '';
+  const id = requestedId || uid('e');
+  const existing = db.prepare('SELECT id, route_id, owner_id FROM expenses WHERE id = ?').get(id);
+  if (existing) {
+    if (existing.route_id === routeId && existing.owner_id === ownerId) {
+      const old = getExpense(id, routeId);
+      const sameParts = JSON.stringify((old.parts || []).slice().sort()) === JSON.stringify(v.parts.slice().sort());
+      const same = old.category === v.category && old.amount === v.amount && old.spent_on === v.spent_on &&
+        old.title === v.title && old.note === v.note && old.payer_id === v.payer_id && sameParts;
+      if (same) return old; /* POST 重放：幂等成功 */
+    }
+    const e = new Error('该流水已存在且内容不一致'); e.code = 'ID_CONFLICT'; throw e;
+  }
   const now = Date.now();
   const tx = db.transaction(() => {
     db.prepare(`INSERT INTO expenses (id, route_id, owner_id, spent_on, category, amount, currency, title, note, payer_id, split_mode, is_opening, created_at, updated_at)
@@ -656,6 +701,184 @@ function insertExpense(routeId, ownerId, data) {
   return getExpense(id, routeId);
 }
 
+/* 离线批量同步。外层单事务保证一组操作原子提交；逐笔校验错误转成结果，
+ * 只有数据库级意外错误才中止并回滚整组。聚合在事务末尾最多重算一次。 */
+function syncExpenseOps(routeId, ownerId, ops) {
+  const list = Array.isArray(ops) ? ops : [];
+  if (list.length > 200) { const e = new Error('单次最多同步 200 笔'); e.code = 'OPS_TOO_MANY'; throw e; }
+  const now = Date.now();
+  const results = [];
+  let changed = false;
+
+  const tx = db.transaction(() => {
+    const route = db.prepare('SELECT id, owner_id, currency FROM routes WHERE id = ?').get(routeId);
+    if (!route || route.owner_id !== ownerId) {
+      for (const op of list) results.push({ op_id: String((op && op.op_id) || ''), status: 'rejected', code: 'ROUTE_NOT_FOUND', message: '路线不存在或无权访问' });
+      return;
+    }
+
+    const travelerIds = new Set(listTravelers(routeId).map(t => t.id));
+    const insExpense = db.prepare(`INSERT INTO expenses
+      (id, route_id, owner_id, spent_on, category, amount, currency, title, note, payer_id, split_mode, is_opening, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?)`);
+    const insPart = db.prepare('INSERT INTO expense_parts (expense_id, traveler_id, weight) VALUES (?,?,1)');
+
+    for (const raw of list) {
+      const op = raw && typeof raw === 'object' ? raw : {};
+      const opId = typeof op.op_id === 'string' ? op.op_id.slice(0, 80) : '';
+      const type = op.type;
+      const clientId = typeof op.client_id === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(op.client_id) ? op.client_id : '';
+      if (!opId || !clientId || (type !== 'expense.create' && type !== 'expense.delete' && type !== 'expense.update')) {
+        results.push({ op_id: opId, status: 'rejected', code: 'INVALID_OP', message: '操作格式不正确' });
+        continue;
+      }
+
+      if (type === 'expense.delete') {
+        const existing = db.prepare('SELECT id FROM expenses WHERE id = ? AND route_id = ? AND owner_id = ?')
+          .get(clientId, routeId, ownerId);
+        if (existing) {
+          db.prepare('DELETE FROM expenses WHERE id = ? AND route_id = ? AND owner_id = ?')
+            .run(clientId, routeId, ownerId);
+          changed = true;
+        }
+        results.push({ op_id: opId, status: 'accepted', id: clientId });
+        continue;
+      }
+
+      /* expense.update（阶段 2 离线编辑）：乐观锁 + 幂等重放。
+       * · 流水不存在（可能已在其他端删除）→ rejected，保留队列交用户处置；
+       * · 服务端当前内容已等于目标内容 → duplicate（重放时 base 必然过期，不能误判冲突）；
+       * · base_updated_at 与服务端 updated_at 不一致 → conflict，附服务端记录供二选一；
+       * · 同行人失效 → 与新增同口径降级（金额保留、payer 置空、parts 清空）。 */
+      if (type === 'expense.update') {
+        const row = db.prepare('SELECT * FROM expenses WHERE id = ?').get(clientId);
+        if (!row || row.route_id !== routeId || row.owner_id !== ownerId) {
+          results.push({ op_id: opId, status: 'rejected', code: 'EXPENSE_NOT_FOUND', message: '该流水已不存在（可能已在其他设备删除）' });
+          continue;
+        }
+        const upd = op.data && typeof op.data === 'object' ? op.data : {};
+        const old = expenseToJson(row, partsFor([clientId]));
+        const updPayer = upd.payer_id ? String(upd.payer_id) : null;
+        const updParts = Array.isArray(upd.parts) ? [...new Set(upd.parts.map(String))] : [];
+        const updMissing = (updPayer && !travelerIds.has(updPayer)) || updParts.some(t => !travelerIds.has(t));
+        let uv;
+        try {
+          uv = validateExpenseInput(routeId, {
+            category: upd.category, amount: upd.amount, spent_on: upd.spent_on,
+            title: upd.title, note: upd.note,
+            payer_id: updMissing ? null : updPayer,
+            parts: updMissing ? [] : updParts
+          });
+        } catch (e) {
+          results.push({ op_id: opId, status: 'rejected', code: e.code || 'INVALID_EXPENSE', message: e.message || '流水内容不正确' });
+          continue;
+        }
+        const sameParts = JSON.stringify((old.parts || []).slice().sort()) === JSON.stringify(uv.parts.slice().sort());
+        const contentSame = old.category === uv.category && old.amount === uv.amount && old.spent_on === uv.spent_on &&
+          old.title === uv.title && old.note === uv.note && old.payer_id === uv.payer_id && sameParts;
+        if (contentSame) {
+          results.push({ op_id: opId, status: 'duplicate', id: clientId, server_record: old });
+          continue;
+        }
+        const base = upd.base_updated_at;
+        if (base !== undefined && base !== null && String(base) !== '' && Number(base) !== Number(row.updated_at)) {
+          results.push({ op_id: opId, status: 'conflict', code: 'EDIT_CONFLICT', message: '该流水已在其他端被修改，请选择保留哪一侧', server: old });
+          continue;
+        }
+        db.prepare(`UPDATE expenses SET spent_on=?, category=?, amount=?, title=?, note=?, payer_id=?, split_mode=?, updated_at=? WHERE id=? AND route_id=?`)
+          .run(uv.spent_on, uv.category, uv.amount, uv.title, uv.note, uv.payer_id, uv.split_mode, now, clientId, routeId);
+        db.prepare('DELETE FROM expense_parts WHERE expense_id = ?').run(clientId);
+        uv.parts.forEach(t => insPart.run(clientId, t));
+        changed = true;
+        results.push(updMissing
+          ? { op_id: opId, status: 'degraded', id: clientId, code: 'TRAVELER_MISSING', message: '同行人已不存在，已记为未指定付款人', server_record: getExpense(clientId, routeId) }
+          : { op_id: opId, status: 'accepted', id: clientId, server_record: getExpense(clientId, routeId) });
+        continue;
+      }
+
+      const data = op.data && typeof op.data === 'object' ? op.data : {};
+      const existing = db.prepare('SELECT * FROM expenses WHERE id = ?').get(clientId);
+      if (existing) {
+        /* 不泄露其他路线流水内容：跨路线/owner 的相同 id 仅返回 conflict。 */
+        if (existing.route_id !== routeId || existing.owner_id !== ownerId) {
+          results.push({ op_id: opId, status: 'conflict', code: 'ID_CONFLICT', message: '客户端 id 已被占用' });
+          continue;
+        }
+        const old = expenseToJson(existing, partsFor([clientId]));
+        let normalized;
+        try {
+          const clean = {
+            category: data.category, amount: data.amount, spent_on: data.spent_on,
+            title: data.title, note: data.note, payer_id: data.payer_id,
+            parts: Array.isArray(data.parts) ? data.parts.filter(x => travelerIds.has(String(x))) : []
+          };
+          /* 对比已存在项时，引用已删除的同行人视为内容不一致；不把旧项降级后误判 duplicate。 */
+          const hasMissing = (data.payer_id && !travelerIds.has(String(data.payer_id))) ||
+            (Array.isArray(data.parts) && data.parts.some(x => !travelerIds.has(String(x))));
+          if (hasMissing) {
+            const sameBase = old.category === String(data.category || '').trim() && round2(num(old.amount)) === round2(num(data.amount)) &&
+              old.spent_on === String(data.spent_on || '').trim() && old.title === String(data.title || '').trim().slice(0, 200) &&
+              old.note === String(data.note || '').trim().slice(0, 500) && old.payer_id == null &&
+              old.split_mode === 'none' && (old.parts || []).length === 0;
+            if (sameBase) {
+              results.push({ op_id: opId, status: 'duplicate', id: clientId, server_record: old });
+              continue;
+            }
+            throw Object.assign(new Error('同行人已不存在'), { code: 'TRAVELER_MISSING' });
+          }
+          normalized = validateExpenseInput(routeId, clean);
+        } catch (e) {
+          results.push({ op_id: opId, status: 'conflict', code: 'ID_CONFLICT', message: '客户端 id 已存在且内容不一致' });
+          continue;
+        }
+        const oldParts = (old.parts || []).slice().sort();
+        const newParts = normalized.parts.slice().sort();
+        const same = old.category === normalized.category && old.amount === normalized.amount &&
+          old.spent_on === normalized.spent_on && old.title === normalized.title && old.note === normalized.note &&
+          old.payer_id === normalized.payer_id && JSON.stringify(oldParts) === JSON.stringify(newParts);
+        results.push(same
+          ? { op_id: opId, status: 'duplicate', id: clientId, server_record: old }
+          : { op_id: opId, status: 'conflict', code: 'ID_CONFLICT', message: '客户端 id 已存在且内容不一致' });
+        continue;
+      }
+
+      /* 先做白名单浅清理，验证函数负责金额/类目/日期/长度约束。 */
+      const payerRaw = data.payer_id ? String(data.payer_id) : null;
+      const partsRaw = Array.isArray(data.parts) ? [...new Set(data.parts.map(String))] : [];
+      const travelerMissing = (payerRaw && !travelerIds.has(payerRaw)) || partsRaw.some(id => !travelerIds.has(id));
+      const payload = {
+        category: data.category,
+        amount: data.amount,
+        spent_on: data.spent_on,
+        title: data.title,
+        note: data.note,
+        payer_id: travelerMissing ? null : payerRaw,
+        parts: travelerMissing ? [] : partsRaw
+      };
+      let v;
+      try {
+        v = validateExpenseInput(routeId, payload);
+      } catch (e) {
+        results.push({ op_id: opId, status: 'rejected', code: e.code || 'INVALID_EXPENSE', message: e.message || '流水内容不正确' });
+        continue;
+      }
+
+      insExpense.run(clientId, routeId, ownerId, v.spent_on, v.category, v.amount, route.currency || 'CNY',
+        v.title, v.note, v.payer_id, v.split_mode, now, now);
+      v.parts.forEach(id => insPart.run(clientId, id));
+      changed = true;
+      results.push(travelerMissing
+        ? { op_id: opId, status: 'degraded', id: clientId, code: 'TRAVELER_MISSING', message: '同行人已不存在，已记为未指定付款人', server_record: getExpense(clientId, routeId) }
+        : { op_id: opId, status: 'accepted', id: clientId, server_record: getExpense(clientId, routeId) });
+    }
+
+    if (changed) recomputeRouteAgg(routeId);
+  });
+
+  tx();
+  return { server_time: Date.now(), results };
+}
+
 function getExpense(id, routeId) {
   const row = db.prepare('SELECT * FROM expenses WHERE id = ? AND route_id = ?').get(id, routeId);
   if (!row) return null;
@@ -665,6 +888,16 @@ function getExpense(id, routeId) {
 function updateExpense(id, routeId, data) {
   const cur = db.prepare('SELECT * FROM expenses WHERE id = ? AND route_id = ?').get(id, routeId);
   if (!cur) return null;
+  /* 离线编辑乐观锁（设计 §11 阶段 2）：客户端可携带 base_updated_at（离线编辑时看到的
+   * 服务端版本戳）。与服务端当前 updated_at 不一致 → 抛 EDIT_CONFLICT 并附服务端记录，
+   * 交由冲突处置面板决定「保留本地 / 采用服务端」。缺省时保持原有无条件更新（在线编辑）。 */
+  const base = data.base_updated_at;
+  if (base !== undefined && base !== null && String(base) !== '' && Number(base) !== Number(cur.updated_at)) {
+    const e = new Error('该流水已在其他端被修改');
+    e.code = 'EDIT_CONFLICT';
+    e.server = getExpense(id, routeId);
+    throw e;
+  }
   /* 局部更新：未提交字段沿用现值，避免「不传即清空」 */
   const merged = {
     category: data.category === undefined ? cur.category : data.category,
@@ -719,7 +952,20 @@ function listExpenses(routeId, opts = {}) {
   if (opts.payer) { where.push('payer_id = ?'); args.push(String(opts.payer)); }
   if (opts.from) { where.push('spent_on >= ?'); args.push(String(opts.from)); }
   if (opts.to) { where.push('spent_on <= ?'); args.push(String(opts.to)); }
+  /* 增量拉取（离线客户端）：只返回 updated_at 晚于游标的行。不返回删除墓碑 ——
+   * 客户端以「打开台账时全量刷新」兜底对账删除；增量仅用于在线期间的低成本补拉。 */
+  const since = Number(opts.updatedSince) > 0 ? Number(opts.updatedSince) : 0;
+  if (since) { where.push('updated_at > ?'); args.push(since); }
   const w = where.join(' AND ');
+
+  if (since) {
+    const rows = db.prepare(`SELECT * FROM expenses WHERE ${w} ORDER BY updated_at ASC LIMIT 1000`).all(...args);
+    const partsMap = partsFor(rows.map(r => r.id));
+    /* 游标 = 本次返回行的最大 updated_at（空集则原地不动），保证「查询后、响应前」的写入
+     * 下次仍会被拉取到，不会因时钟推进而漏行。 */
+    const watermark = rows.length ? (Number(rows[rows.length - 1].updated_at) || since) : since;
+    return { list: rows.map(r => expenseToJson(r, partsMap)), total: rows.length, incremental: true, watermark, server_time: Date.now() };
+  }
 
   const agg = db.prepare(`SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS s FROM expenses WHERE ${w}`).get(...args);
   const byCategory = {};
@@ -734,7 +980,9 @@ function listExpenses(routeId, opts = {}) {
   const partsMap = partsFor(rows.map(r => r.id));
   return {
     list: rows.map(r => expenseToJson(r, partsMap)),
-    total: agg.c, amount: round2(agg.s), byCategory, page, pageSize
+    total: agg.c, amount: round2(agg.s), byCategory, page, pageSize,
+    /* 全量口径同样返回服务端时间：作为客户端增量拉取游标（watermark）的起点。 */
+    server_time: Date.now()
   };
 }
 
@@ -816,6 +1064,102 @@ function settle(routeId) {
 }
 
 /* 某路线的流水笔数与结算概览（列表页卡片用，避免逐条查询） */
+
+/* ---------- 币种不变量维护 ----------
+ * 不变量：expenses.currency 必须恒等于其所属 routes.currency。
+ * 写入侧已保证（insertExpense 取路线币种；updateRoute 改币种时同步改写），
+ * 本函数为**幂等修复**：校正历史库中因「改币种未重算」而残留的分叉数据。
+ * 校正不改变任何金额数字，也不改变界面显示（界面一直按路线币种汇总），仅重贴标签。 */
+function enforceExpenseCurrencyInvariant() {
+  const r = db.prepare(`UPDATE expenses
+      SET currency = (SELECT r.currency FROM routes r WHERE r.id = expenses.route_id)
+      WHERE COALESCE(currency, '') <> COALESCE((SELECT r.currency FROM routes r WHERE r.id = expenses.route_id), '')`).run();
+  if (r.changes) console.log(`[db] 已校正 ${r.changes} 笔流水的币种以匹配所属路线（币种不变量）`);
+  return r.changes;
+}
+
+/* ---------- 备份还原：同行人 + 逐笔流水 ----------
+ * 导出结构（可往返）：travelers 携带原 id 以便流水引用；expenses 的 payer_id / parts
+ * 指向 travelers[].id。导入时按 id 映射重写，避免跨路线 id 冲突。 */
+function exportLedger(routeId) {
+  const travelers = listTravelers(routeId).map(t => ({
+    id: t.id, name: t.name, is_self: !!t.is_self, sort_no: t.sort_no
+  }));
+  const rows = db.prepare('SELECT * FROM expenses WHERE route_id = ? ORDER BY spent_on ASC, created_at ASC').all(routeId);
+  const partsMap = partsFor(rows.map(r => r.id));
+  const expenses = rows.map(r => ({
+    spent_on: r.spent_on || '',
+    category: r.category,
+    amount: num(r.amount),
+    title: r.title || '',
+    note: r.note || '',
+    payer_id: r.payer_id || null,
+    is_opening: !!r.is_opening,
+    parts: (partsMap[r.id] || []).slice()
+  }));
+  return { travelers, expenses };
+}
+
+/* 把导出的同行人 / 流水还原到目标路线。
+ * · 同行人按名称去重（同路线内不允许重名），并维护「本人」唯一性；
+ * · 流水 payer_id / parts 按旧→新 id 映射改写，映射不到的（同行人缺失）退化为未指定；
+ * · 流水币种统一取路线币种，维持币种不变量；
+ * · 类目非法 / 金额非正的条目跳过，不阻断整体导入。 */
+function importLedger(routeId, ownerId, travelers, expenses) {
+  const tList = Array.isArray(travelers) ? travelers : [];
+  const eList = Array.isArray(expenses) ? expenses : [];
+  if (!tList.length && !eList.length) return { travelers: 0, expenses: 0 };
+
+  const route = db.prepare('SELECT currency FROM routes WHERE id = ?').get(routeId);
+  const cur = (route && route.currency) || 'CNY';
+  const now = Date.now();
+  const idMap = new Map();
+  let tCreated = 0, eCreated = 0;
+
+  const tx = db.transaction(() => {
+    const cur0 = listTravelers(routeId);
+    const exist = new Set(cur0.map(t => t.name));
+    let hasSelf = cur0.some(t => t.is_self);
+    let sortNo = cur0.length;
+    const insT = db.prepare('INSERT INTO travelers (id, route_id, owner_id, name, is_self, sort_no, created_at) VALUES (?,?,?,?,?,?,?)');
+    for (const t of tList) {
+      const name = String((t && t.name) || '').trim();
+      if (!name || exist.has(name)) continue;
+      exist.add(name);
+      const nid = uid('t');
+      const selfFlag = (t.is_self && !hasSelf) ? 1 : 0;
+      if (selfFlag) hasSelf = true;
+      insT.run(nid, routeId, ownerId, name, selfFlag, sortNo++, now);
+      if (t.id) idMap.set(String(t.id), nid);
+      tCreated++;
+    }
+
+    const insE = db.prepare(`INSERT INTO expenses
+        (id, route_id, owner_id, spent_on, category, amount, currency, title, note, payer_id, split_mode, is_opening, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const insP = db.prepare('INSERT OR IGNORE INTO expense_parts (expense_id, traveler_id, weight) VALUES (?,?,1)');
+    for (const e of eList) {
+      if (!e || typeof e !== 'object') continue;
+      const category = String(e.category || '').trim();
+      if (!EXP_KEYS.includes(category)) continue;
+      const amount = round2(num(e.amount));
+      if (!(amount > 0)) continue;
+      const eid = uid('e');
+      const payer = e.payer_id && idMap.has(String(e.payer_id)) ? idMap.get(String(e.payer_id)) : null;
+      const parts = (Array.isArray(e.parts) ? e.parts : [])
+        .map(p => idMap.get(String(p))).filter(Boolean);
+      const splitMode = parts.length ? 'equal' : 'none';
+      insE.run(eid, routeId, ownerId, String(e.spent_on || '').slice(0, 10), category, amount, cur,
+        String(e.title || '').slice(0, 200), String(e.note || '').slice(0, 500),
+        payer, splitMode, e.is_opening ? 1 : 0, now, now);
+      parts.forEach(p => insP.run(eid, p));
+      eCreated++;
+    }
+    recomputeRouteAgg(routeId);
+  });
+  tx();
+  return { travelers: tCreated, expenses: eCreated };
+}
 
 /* ============================================================================
    行程按天（景点路线 / 住宿）
@@ -921,14 +1265,16 @@ module.exports = {
   initDb, get db() { return db; },
   EXP_KEYS, EXP_COL, num, scryptHash, uid,
   ROUTE_COLS,
+  parseDateRange, routeStartMs,
   routeToJson, insertRoute, updateRoute, getRoute,
   getShareToken, setShareToken, clearShareToken, findRouteByShareToken,
   getAiConfig, saveAiConfig, getAiEnabledUserIds, isAiEnabledUser, setAiEnabledUsers,
   audit,
   /* 逐笔流水 + AA 分账 */
-  recomputeRouteAgg, migrateAggregatesToOpening,
+  recomputeRouteAgg, migrateAggregatesToOpening, enforceExpenseCurrencyInvariant,
   listTravelers, findTraveler, addTravelers, updateTraveler, deleteTraveler, travelerUsage,
-  insertExpense, updateExpense, deleteExpense, bulkDeleteExpenses, listExpenses, getExpense,
+  insertExpense, syncExpenseOps, updateExpense, deleteExpense, bulkDeleteExpenses, listExpenses, getExpense,
+  exportLedger, importLedger,
   settle,
   /* 行程按天（景点路线 / 住宿） */
   dayDateLabel, listRouteDays, daysForRoutes, setRouteDays, recomputeRouteDays, migrateDaysFromScenic,

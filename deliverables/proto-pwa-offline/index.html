@@ -1,0 +1,676 @@
+<!doctype html>
+<!-- PWA 离线记账 · 交互原型（零依赖，双击即可打开）
+     用途：评审「离线记一笔 → 自动同步」的交互与状态机，并演示四类同步结果。
+     数据全在内存，刷新即重置，不连接任何后端。
+     配套设计文档：../pwa-offline-design-2026-10-14.md -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PWA 离线记账 · 交互原型</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="proto.css">
+</head>
+<body>
+
+<header>
+  <div class="h-row">
+    <div>
+      <div class="h-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>
+        <span>离线记账 · 交互原型</span>
+      </div>
+      <div class="h-sub">断网也能记一笔，恢复网络后自动同步</div>
+    </div>
+    <div style="margin-left:auto">
+      <label class="switch" style="color:#fff;font-size:13px;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="netToggle" checked> 在线
+      </label>
+    </div>
+  </div>
+</header>
+
+<!-- 离线指示条：默认隐藏，由引擎状态驱动 -->
+<div class="offline-bar" id="offlineBar">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="barIcon"><path d="M1 1l22 22"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+  <span id="barText"></span>
+  <span class="sp"></span>
+  <button id="barAction">立即同步</button>
+</div>
+
+<main id="view">
+
+  <!-- ============ 演示控制台（仅原型） ============ -->
+  <div class="panel demo-panel">
+    <h3>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      演示控制台
+    </h3>
+    <div class="demo-row">
+      <label>故障注入</label>
+      <select id="faultSel">
+        <option value="none">正常（全部成功）</option>
+        <option value="network">网络失败（触发退避重试）</option>
+        <option value="degraded">付款人已不存在（自动降级）</option>
+        <option value="rejected">路线已被删除（拒绝）</option>
+      </select>
+      <button class="btn btn-sm" id="btnSync">立即同步</button>
+      <button class="btn btn-sm" id="btnReplay">重放上一批（演示幂等）</button>
+      <button class="btn btn-sm btn-line" id="btnReset">重置演示</button>
+    </div>
+    <div class="demo-note" id="demoNote"></div>
+  </div>
+
+  <!-- ============ 路线卡 ============ -->
+  <div class="panel">
+    <h3>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      北海道赏雪 7 日
+    </h3>
+    <div class="kv"><span class="k">出行日期</span><span class="v">2026/12/20 - 2026/12/26（7天）</span></div>
+    <div class="kv"><span class="k">同行人</span><span class="v" id="tvLine"></span></div>
+    <div class="kv"><span class="k">总花费</span><span class="v" id="totalLine">—</span></div>
+  </div>
+
+  <!-- ============ 流水（服务端缓存 ⊕ 队列投影） ============ -->
+  <div class="panel">
+    <h3>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 9l-5 5-3-3-3 3"/></svg>
+      流水
+      <span class="hint" style="font-weight:400" id="ledgerHint"></span>
+    </h3>
+    <div id="ledger"></div>
+    <div class="led-empty-actions">
+      <button class="btn btn-primary btn-sm" id="addBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        记一笔
+      </button>
+      <button class="btn btn-sm" id="queueBtn">同步队列 <span id="queueCount">0</span></button>
+    </div>
+  </div>
+
+  <!-- ============ 引擎事件日志 ============ -->
+  <div class="panel">
+    <h3>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+      引擎事件日志
+      <span class="hint" style="font-weight:400">offline.js 实际会做的事</span>
+    </h3>
+    <div class="log" id="log"></div>
+  </div>
+
+</main>
+
+<!-- ============ 记一笔弹层 ============ -->
+<div class="mask" id="expMask">
+  <div class="sheet">
+    <h2>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      记一笔
+    </h2>
+
+    <div class="field">
+      <label>金额</label>
+      <input id="e_amount" placeholder="0" inputmode="decimal">
+    </div>
+    <div class="field">
+      <label>类目</label>
+      <div class="chip-row" id="e_cats"></div>
+    </div>
+    <div class="field">
+      <label>日期</label>
+      <input type="date" id="e_date">
+    </div>
+    <div class="field">
+      <label>事项 <span class="hint">可选</span></label>
+      <input id="e_title" placeholder="如：晚饭">
+    </div>
+    <div class="field">
+      <label>谁付的钱</label>
+      <div class="chip-row" id="e_payer"></div>
+    </div>
+    <div class="field">
+      <label>谁参与分摊 <span class="hint">不选＝仅记录实付</span></label>
+      <div class="chip-row" id="e_parts"></div>
+    </div>
+    <div class="banner" id="e_hint" style="margin-top:4px"></div>
+
+    <div class="sheet-actions">
+      <button class="btn btn-line" id="e_cancel">取消</button>
+      <button class="btn btn-primary" id="e_save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 同步队列弹层 ============ -->
+<div class="mask" id="queueMask">
+  <div class="sheet">
+    <h2>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg>
+      同步队列
+    </h2>
+    <div id="queueBody"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-line" id="q_close">关闭</button>
+      <button class="btn btn-primary" id="q_sync">立即同步</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================================
+   原型内的「服务端」与「离线引擎」都是内存模拟。
+   真实实现见设计文档 §5（同步引擎）与 §6（API 契约）。
+   ============================================================================ */
+
+/* ---------- 工具 ---------- */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => (s == null ? '' : String(s)).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const CATS = ['交通', '机票', '高铁', '住宿', '餐饮', '门票', '团费', '购物', '其他'];
+const CAT_COLORS = { '交通': '#60a5fa', '机票': '#3b82f6', '高铁': '#06b6d4', '住宿': '#f59e0b', '餐饮': '#ef6b5e', '门票': '#a78bfa', '团费': '#ec4899', '购物': '#fb923c', '其他': '#94a3b8' };
+const CUR = '¥';
+const uid = (p) => (p || 'o') + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const fmt = (n) => (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('zh-CN');
+const money = (n) => CUR + fmt(n);
+/* 本地日期（禁用 toISOString —— 项目硬约束） */
+const todayISO = () => { const d = new Date(); const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
+
+/* ---------- 状态 ---------- */
+const SEED_SERVER = [
+  { id: 'e-seed-1', category: '机票', amount: 12400, spent_on: '2026-12-20', title: '往返机票 4 人', payer_id: 't1', parts: ['t1', 't2', 't3', 't4'], split_mode: 'equal', created_at: 1 },
+  { id: 'e-seed-2', category: '住宿', amount: 8600, spent_on: '2026-12-20', title: '酒店 6 晚', payer_id: 't2', parts: ['t1', 't2', 't3', 't4'], split_mode: 'equal', created_at: 2 }
+];
+let S;
+
+function reset() {
+  S = {
+    online: true,
+    travelers: [
+      { id: 't1', name: '我', is_self: true }, { id: 't2', name: '阿May' },
+      { id: 't3', name: '老陈' }, { id: 't4', name: '小周' }
+    ],
+    server: SEED_SERVER.map(e => ({ ...e })),
+    queue: [],
+    results: [],
+    lastBatch: [],
+    fault: 'none',
+    syncing: false,
+    log: [],
+    draft: null
+  };
+  $('faultSel').value = 'none';
+  $('netToggle').checked = true;
+  S.log = [];
+  log('引擎就绪：读缓存已命中，队列为空', 'info');
+  render();
+}
+
+function log(text, cls) {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  S.log.push({ ts: `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`, text, cls: cls || '' });
+  if (S.log.length > 200) S.log.shift();
+}
+
+/* ---------- 队列 ---------- */
+function newOp(type, clientId, payload) {
+  return { opId: uid('o'), type, clientId, payload, status: 'pending', attempts: 0, nextRetryAt: 0, createdAt: Date.now() };
+}
+const opLabel = (op) => op.type === 'delete'
+  ? `删除 ${op.payload ? (op.payload.title || op.payload.category) : op.clientId}`
+  : `${op.payload.category} ${money(op.payload.amount)}`;
+const statusText = (s) => ({
+  accepted: '已接受', duplicate: '判为重复（幂等）', degraded: '已降级入库',
+  conflict: '冲突', rejected: '被拒绝', local_cancel: '本地消解', network_error: '网络失败'
+}[s] || s);
+
+/* 退避：1s → 2s → 4s → 8s（原型上限 8s；生产上限 60s，见设计文档 §5.2） */
+const backoffMs = (attempts) => Math.min(1000 * Math.pow(2, Math.max(0, attempts - 1)), 8000);
+
+/* ---------- 投影：服务端缓存 ⊕ 队列（乐观 UI 的核心） ---------- */
+function project() {
+  const active = S.queue.filter(o => o.status !== 'done');
+  const pendingDel = new Set(active.filter(o => o.type === 'delete').map(o => o.clientId));
+
+  const rows = S.server
+    .filter(e => !pendingDel.has(e.id))
+    .map(e => ({ ...e, pending: false, opStatus: '' }));
+
+  for (const op of active) {
+    if (op.type !== 'create' || pendingDel.has(op.clientId)) continue;
+    rows.push({ id: op.clientId, ...op.payload, pending: true, opStatus: op.status, createdAt: op.createdAt });
+  }
+
+  /* 排序口径必须与服务端 listExpenses 一致：spent_on DESC, created_at DESC
+     （否则在线/离线切换时列表顺序会跳动 —— 设计文档 §15 第 4 条） */
+  rows.sort((a, b) => {
+    const sa = a.spent_on || '', sb = b.spent_on || '';
+    if (sa !== sb) return sa < sb ? 1 : -1;
+    return (b.created_at || 0) - (a.created_at || 0);
+  });
+  return rows;
+}
+
+/* ---------- 模拟服务端 ---------- */
+/* 新增落库的唯一入口：**在线直发**与**批量同步**共用，保证故障注入语义一致
+   （否则「在线直发」会绕过降级/拒绝规则，演示与真实行为不符）。 */
+function applyCreate(clientId, payload) {
+  const existing = S.server.find(e => e.id === clientId);
+  if (existing) {
+    const keys = ['category', 'amount', 'spent_on', 'title', 'payer_id'];
+    const same = keys.every(k => String(existing[k] == null ? '' : existing[k]) === String(payload[k] == null ? '' : payload[k]))
+      && JSON.stringify(existing.parts || []) === JSON.stringify(payload.parts || []);
+    return same
+      ? { status: 'duplicate', message: 'id 已存在且内容一致 → 不重复落库' }
+      : { status: 'conflict', message: 'id 已存在但内容不一致' };
+  }
+  if (S.fault === 'rejected') return { status: 'rejected', message: '该路线已被删除（ROUTE_NOT_FOUND）' };
+
+  let p = { ...payload };
+  let status = 'accepted', message = '';
+  if (S.fault === 'degraded') {
+    /* 同行人失效 → 自动降级为 unassigned，保留金额（Σnet 不变量不被破坏） */
+    p = { ...p, payer_id: null, parts: [], split_mode: 'none' };
+    status = 'degraded';
+    message = '付款人已不存在 → 降级为未指定付款人（计入 unassigned，不参与结算）';
+  }
+  S.server.push({ id: clientId, ...p, created_at: Date.now() });
+  return { status, message };
+}
+
+async function applyOpOnServer(op) {
+  if (S.fault === 'network') return { status: 'network_error' };
+
+  if (op.type === 'delete') {
+    const i = S.server.findIndex(e => e.id === op.clientId);
+    const existed = i >= 0;
+    if (existed) S.server.splice(i, 1);
+    return { status: 'accepted', message: existed ? '' : '服务端已不存在（幂等删除）' };
+  }
+  return applyCreate(op.clientId, op.payload);
+}
+
+/* ---------- 同步引擎 ---------- */
+async function sync(opts) {
+  const manual = !!(opts && opts.manual);
+  if (S.syncing) return;
+  if (!S.online) { log('当前离线，跳过同步', 'warn'); render(); return; }
+
+  /* 自动重试只处理 pending；手动同步额外纳入 failed
+     （设计文档 §5.2：达最大次数转 failed 后仍可由用户手动重试） */
+  const pending = S.queue
+    .filter(o => o.status === 'pending' || (manual && o.status === 'failed'))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  if (!pending.length) { log('队列为空，无需同步', 'info'); render(); return; }
+
+  S.syncing = true; render();
+  log(`▶ 开始同步：${pending.length} 笔待处理`, 'info');
+  await sleep(520);
+
+  const batch = [];
+  for (const op of pending) {
+    if (op.status === 'done') continue;
+
+    /* 本地消解：删除一个「尚未同步的新增」→ 两条一起丢弃，无需网络 */
+    if (op.type === 'delete') {
+      const c = S.queue.find(o => o.type === 'create' && o.clientId === op.clientId && o.status === 'pending');
+      if (c) {
+        c.status = 'done'; op.status = 'done';
+        S.results.unshift({ opId: op.opId, label: opLabel(op), status: 'local_cancel', message: '新增后即删除，未发起网络请求', at: Date.now() });
+        log(`⊘ ${opLabel(op)} → 本地消解（未发起任何网络请求）`, 'ok');
+        render(); continue;
+      }
+    }
+
+    op.status = 'inflight'; render();
+    await sleep(240);
+    const res = await applyOpOnServer(op);
+
+    if (res.status === 'network_error') {
+      op.attempts++;
+      op.status = 'pending';
+      op.nextRetryAt = Date.now() + backoffMs(op.attempts);
+      S.results.unshift({ opId: op.opId, label: opLabel(op), status: 'network_error', message: `第 ${op.attempts} 次失败 · ${Math.ceil((op.nextRetryAt - Date.now()) / 1000)}s 后重试`, at: Date.now() });
+      log(`✕ ${opLabel(op)}：网络失败（第 ${op.attempts} 次）→ 退避 ${Math.ceil((op.nextRetryAt - Date.now()) / 1000)}s`, 'err');
+      render();
+      break;   /* 网络类失败：中断本轮，等待退避后自动重试 */
+    }
+
+    /* rejected / conflict → 保留在队列（绝不静默丢弃），并停止自动重试 */
+    if (res.status === 'rejected' || res.status === 'conflict') {
+      op.status = 'failed';
+      op.lastError = res;
+      S.results.unshift({ opId: op.opId, label: opLabel(op), status: res.status, message: res.message || '', at: Date.now() });
+      log(`✕ ${opLabel(op)} → ${statusText(res.status)}：${res.message} · 已保留在队列待用户处置`, 'err');
+      render(); continue;
+    }
+
+    op.status = 'done';
+    S.results.unshift({ opId: op.opId, label: opLabel(op), status: res.status, message: res.message || '', at: Date.now() });
+    if (op.type === 'create' && (res.status === 'accepted' || res.status === 'degraded')) {
+      batch.push({ clientId: op.clientId, payload: { ...op.payload } });
+    }
+    const cls = (res.status === 'accepted' || res.status === 'duplicate') ? 'ok' : 'warn';
+    const mark = res.status === 'accepted' ? '✓' : res.status === 'duplicate' ? '↺' : '⚠';
+    log(`${mark} ${opLabel(op)} → ${statusText(res.status)}${res.message ? '：' + res.message : ''}`, cls);
+    render();
+  }
+
+  S.queue = S.queue.filter(o => o.status !== 'done');
+  if (batch.length) S.lastBatch = batch;
+  S.syncing = false;
+  render();
+  log(S.queue.length ? `■ 本轮结束，仍有 ${S.queue.length} 笔待同步` : '■ 本轮结束，队列已清空', S.queue.length ? 'warn' : 'ok');
+  render();
+}
+
+/* 自动重试：退避到期且在线则自动发起 */
+setInterval(() => {
+  if (!S || !S.online || S.syncing) { tick(); return; }
+  const due = S.queue.some(o => o.status === 'pending' && (!o.nextRetryAt || o.nextRetryAt <= Date.now()));
+  if (due) sync(); else tick();
+}, 1000);
+
+/* 仅刷新指示条与队列计数（避免整页重绘打断输入） */
+function tick() { renderBar(); const el = $('queueCount'); if (el) el.textContent = String(S.queue.length); }
+
+/* ---------- 渲染 ---------- */
+function render() { renderBar(); renderRoute(); renderLedger(); renderQueue(); renderLog(); }
+
+function renderBar() {
+  const bar = $('offlineBar'), txt = $('barText'), act = $('barAction');
+  const n = S.queue.length;
+  bar.className = 'offline-bar';
+  if (!S.online) {
+    bar.classList.add('show', 'off');
+    txt.textContent = `离线 · 已缓存 ${S.server.length} 条流水` + (n ? ` · ${n} 笔待同步` : '');
+    act.textContent = '查看队列'; act.style.display = n ? '' : 'none';
+  } else if (S.syncing) {
+    bar.classList.add('show', 'syncing');
+    txt.textContent = `同步中… 剩余 ${n} 笔`;
+    act.style.display = 'none';
+  } else if (n) {
+    const soon = S.queue.filter(o => o.nextRetryAt > Date.now()).map(o => o.nextRetryAt).sort()[0];
+    bar.classList.add('show');
+    txt.textContent = `${n} 笔待同步` + (soon ? ` · ${Math.max(1, Math.ceil((soon - Date.now()) / 1000))}s 后自动重试` : ' · 将自动同步');
+    act.textContent = '立即同步'; act.style.display = '';
+  } else {
+    act.style.display = 'none';
+  }
+  $('barIcon').classList.toggle('proto-spin', S.syncing);
+}
+
+function renderRoute() {
+  $('tvLine').textContent = S.travelers.map(t => t.name + (t.is_self ? '（本人）' : '')).join('、');
+  const rows = project();
+  const total = rows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const pend = rows.filter(e => e.pending).length;
+  $('totalLine').innerHTML = esc(money(total)) + (pend ? ` <span class="pill pill-pending">含 ${pend} 笔待同步</span>` : '');
+}
+
+function renderLedger() {
+  const rows = project();
+  const box = $('ledger');
+  const pend = rows.filter(e => e.pending).length;
+  $('ledgerHint').textContent = pend ? `${rows.length} 条（${pend} 条待同步）` : `${rows.length} 条`;
+
+  if (!rows.length) { box.innerHTML = '<div class="empty">暂无流水，点「记一笔」开始记录</div>'; return; }
+
+  const days = {};
+  rows.forEach(e => { const k = e.spent_on || '__none__'; (days[k] || (days[k] = [])).push(e); });
+  let h = '';
+  Object.keys(days).sort((a, b) => (a === '__none__' ? '' : a) < (b === '__none__' ? '' : b) ? 1 : -1).forEach(day => {
+    const sum = days[day].reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    h += `<div class="led-day">${day === '__none__' ? '未标注日期' : esc(day.replace(/-/g, '/'))} · ${money(sum)}</div>`;
+    days[day].forEach(e => {
+      const payer = S.travelers.find(t => t.id === e.payer_id);
+      const parts = (e.parts || []).map(id => S.travelers.find(t => t.id === id)).filter(Boolean);
+      let share;
+      if (!parts.length) share = '未计入分摊（仅记录实付）';
+      else if (parts.length === 1) share = '仅 ' + esc(parts[0].name) + ' 承担';
+      else if (parts.length === S.travelers.length) share = parts.length + ' 人平分';
+      else share = parts.length + ' 人分摊 · 非全员';
+      const badge = e.pending
+        ? `<span class="pill ${e.opStatus === 'inflight' ? 'pill-syncing' : 'pill-pending'}">${e.opStatus === 'inflight' ? '同步中' : '待同步'}</span>`
+        : '';
+      h += `<div class="led${e.pending ? ' pending' : ''}" data-exp="${esc(e.id)}">
+        <span class="sw" style="background:${CAT_COLORS[e.category] || '#94a3b8'}"></span>
+        <div class="t">
+          <div class="n">${esc(e.title || e.category)} ${badge}</div>
+          <div class="m">
+            <span>${esc(e.category)}</span><span>·</span>
+            <span>${payer ? esc(payer.name) + ' 付' : '未指定付款人'}</span>
+            <span class="led-share">${share}</span>
+          </div>
+        </div>
+        <span class="amt">${money(e.amount)}</span>
+      </div>`;
+    });
+  });
+  box.innerHTML = h;
+}
+
+function renderQueue() {
+  $('queueCount').textContent = String(S.queue.length);
+  const body = $('queueBody');
+  let h = '';
+
+  if (S.queue.length) {
+    h += `<div class="led-day">待同步（${S.queue.length}）</div>`;
+    S.queue.forEach(op => {
+      const st = op.status === 'inflight' ? 'syncing' : 'pending';
+      const stTxt = op.status === 'inflight' ? '同步中' : (op.nextRetryAt > Date.now() ? `${Math.ceil((op.nextRetryAt - Date.now()) / 1000)}s 后重试` : '待同步');
+      h += `<div class="q-item">
+        <span class="sw" style="background:${CAT_COLORS[op.payload && op.payload.category] || '#94a3b8'}"></span>
+        <div class="t">
+          <div class="n">${esc(opLabel(op))}</div>
+          <div class="m">
+            <span class="pill pill-${st}">${stTxt}</span>
+            <span class="mono">${esc(op.clientId)}</span>
+            ${op.attempts ? `<span>已重试 ${op.attempts} 次</span>` : ''}
+          </div>
+        </div>
+        <div class="q-actions">
+          ${op.type === 'create' ? `<button data-drop="${esc(op.opId)}">丢弃</button>` : ''}
+        </div>
+      </div>`;
+    });
+  } else {
+    h += '<div class="q-empty">队列为空 —— 所有记账都已同步到服务端</div>';
+  }
+
+  if (S.results.length) {
+    h += '<div class="led-day">最近同步结果</div>';
+    S.results.slice(0, 12).forEach(r => {
+      const cls = (r.status === 'accepted' || r.status === 'duplicate' || r.status === 'local_cancel') ? 'ok'
+        : (r.status === 'degraded' ? 'warn' : 'err');
+      h += `<div class="q-item">
+        <div class="t">
+          <div class="n">${esc(r.label)}</div>
+          <div class="m"><span class="${cls}" style="font-weight:600">${esc(statusText(r.status))}</span>
+            ${r.message ? `<span>· ${esc(r.message)}</span>` : ''}</div>
+        </div>
+      </div>`;
+    });
+  }
+  body.innerHTML = h;
+
+  body.querySelectorAll('[data-drop]').forEach(b => {
+    b.onclick = () => {
+      const op = S.queue.find(o => o.opId === b.dataset.drop);
+      S.queue = S.queue.filter(o => o.opId !== b.dataset.drop);
+      log(`⊘ 用户丢弃了一笔待同步记账（${op ? opLabel(op) : ''}）—— 生产实现需二次确认`, 'warn');
+      render();
+    };
+  });
+}
+
+function renderLog() {
+  const box = $('log');
+  box.innerHTML = S.log.slice(-60).map(l => `<div><span class="ts">${l.ts}</span> <span class="${l.cls}">${esc(l.text)}</span></div>`).join('');
+  box.scrollTop = box.scrollHeight;
+  $('demoNote').innerHTML = '故障注入当前为 <b>' + esc($('faultSel').selectedOptions[0].textContent) + '</b>。'
+    + '建议路径：切到「离线」→ 记 2~3 笔（观察虚线行与计数）→ 切回「在线」（观察自动同步）→ 点「重放上一批」验证幂等不产生重复数据。';
+}
+
+/* ---------- 记一笔 ---------- */
+function openExpense() {
+  S.draft = {
+    category: '餐饮', amount: '', spent_on: todayISO(), title: '',
+    payer_id: S.travelers[0].id, parts: S.travelers.map(t => t.id)
+  };
+  $('e_amount').value = ''; $('e_date').value = S.draft.spent_on; $('e_title').value = '';
+  paintChips();
+  $('expMask').classList.add('open');
+  setTimeout(() => $('e_amount').focus(), 120);
+}
+
+function paintChips() {
+  const d = S.draft;
+  $('e_cats').innerHTML = CATS.map(c => `<div class="chip${d.category === c ? ' active' : ''}" data-c="${esc(c)}">${esc(c)}</div>`).join('');
+  $('e_payer').innerHTML = S.travelers.map(t => `<div class="chip${d.payer_id === t.id ? ' active' : ''}" data-p="${esc(t.id)}">${esc(t.name)}</div>`).join('');
+  $('e_parts').innerHTML = S.travelers.map(t => `<div class="chip${d.parts.includes(t.id) ? ' active' : ''}" data-s="${esc(t.id)}">${esc(t.name)}</div>`).join('');
+
+  $('e_cats').querySelectorAll('[data-c]').forEach(el => el.onclick = () => { d.category = el.dataset.c; paintChips(); });
+  $('e_payer').querySelectorAll('[data-p]').forEach(el => el.onclick = () => { d.payer_id = el.dataset.p; paintChips(); });
+  $('e_parts').querySelectorAll('[data-s]').forEach(el => el.onclick = () => {
+    const id = el.dataset.s;
+    d.parts = d.parts.includes(id) ? d.parts.filter(x => x !== id) : d.parts.concat(id);
+    paintChips();
+  });
+  syncHint();
+}
+
+function syncHint() {
+  const d = S.draft;
+  const amt = Number(d.amount) || 0;
+  const box = $('e_hint');
+  if (!d.parts.length) {
+    box.innerHTML = '<span style="color:#9a5b00">未选择分摊人：该笔仅记录实付，<b>不参与 AA 结算</b>（计入 unassigned）。</span>';
+  } else if (amt > 0) {
+    const payer = S.travelers.find(t => t.id === d.payer_id);
+    box.textContent = `${d.parts.length} 人平分，每人 ${money(amt / d.parts.length)} · 由 ${payer ? payer.name : '—'} 垫付`;
+  } else {
+    box.textContent = '填写金额后显示人均。';
+  }
+}
+
+/* 提交分流：先在线直发，网络类失败则入队（同一 clientId → 幂等） */
+async function submitExpense() {
+  const d = S.draft;
+  const amount = Number(d.amount);
+  if (!(amount > 0)) { toast('请填写金额'); return; }
+
+  const clientId = uid('e');                    /* ① 幂等键必须在「第一次尝试之前」生成 */
+  const payload = {
+    category: d.category, amount: Math.round(amount * 100) / 100,
+    spent_on: d.spent_on, title: d.title.trim(),
+    note: '', payer_id: d.payer_id,
+    parts: d.parts.slice(), split_mode: d.parts.length ? 'equal' : 'none'
+  };
+
+  $('expMask').classList.remove('open');
+
+  if (S.online) {
+    log(`→ 在线直发 POST /expenses（id=${clientId}）`, 'info');
+    await sleep(260);
+    if (S.fault !== 'network') {
+      const res = applyCreate(clientId, payload);
+      S.results.unshift({ opId: clientId, label: `${payload.category} ${money(payload.amount)}`, status: res.status, message: res.message || '', at: Date.now() });
+      if (res.status === 'accepted' || res.status === 'duplicate' || res.status === 'degraded') {
+        S.lastBatch = [{ clientId, payload: { ...payload } }];
+        const mark = res.status === 'accepted' ? '✓' : res.status === 'duplicate' ? '↺' : '⚠';
+        log(`${mark} ${payload.category} ${money(payload.amount)} → ${statusText(res.status)}（在线直发，未经过队列）${res.message ? '：' + res.message : ''}`, res.status === 'degraded' ? 'warn' : 'ok');
+        render();
+        toast(res.status === 'degraded' ? '已保存（付款人失效，已记为未指定付款人）' : '已保存');
+        return;
+      }
+      /* rejected / conflict → 入队为 failed，交用户处置（绝不静默丢弃） */
+      const bad = newOp('create', clientId, payload);
+      bad.status = 'failed'; bad.lastError = res;
+      S.queue.push(bad);
+      log(`✕ 直发被拒：${res.message} → 已保留在队列待用户处置`, 'err');
+      render();
+      toast('保存被服务端拒绝，已保留待处理');
+      return;
+    }
+    log('✕ 直发遭遇网络失败 → 转入离线队列（同一 id，重试天然幂等）', 'err');
+  }
+
+  S.queue.push(newOp('create', clientId, payload));
+  log(`＋ 已入队：${payload.category} ${money(payload.amount)}（${clientId}）`, 'warn');
+  render();
+  toast(S.online ? '网络异常，已存入待同步队列' : '已离线保存，联网后自动同步');
+  if (S.online) sync();
+}
+
+/* ---------- 事件绑定 ---------- */
+$('netToggle').onchange = (e) => {
+  S.online = e.target.checked;
+  log(S.online ? '网络恢复：触发一次同步' : '网络断开：后续记账进入离线队列', S.online ? 'info' : 'warn');
+  render();
+  if (S.online) sync();
+};
+$('faultSel').onchange = (e) => { S.fault = e.target.value; log(`故障注入切换为「${e.target.selectedOptions[0].textContent}」`, 'info'); render(); };
+$('btnSync').onclick = () => sync({ manual: true });
+$('btnReset').onclick = () => reset();
+$('btnReplay').onclick = () => {
+  if (!S.lastBatch.length) { toast('还没有可重放的成功批次'); return; }
+  S.lastBatch.forEach(b => S.queue.push(newOp('create', b.clientId, { ...b.payload })));
+  log(`↻ 已重放上一批 ${S.lastBatch.length} 笔（沿用同一 id）—— 预期服务端判为「重复」，不产生新数据`, 'info');
+  render();
+  if (S.online) sync();
+};
+$('addBtn').onclick = openExpense;
+$('queueBtn').onclick = () => { renderQueue(); $('queueMask').classList.add('open'); };
+$('barAction').onclick = () => { if (!S.online) { renderQueue(); $('queueMask').classList.add('open'); } else sync({ manual: true }); };
+$('e_cancel').onclick = () => $('expMask').classList.remove('open');
+$('e_save').onclick = submitExpense;
+$('q_close').onclick = () => $('queueMask').classList.remove('open');
+$('q_sync').onclick = () => { $('queueMask').classList.remove('open'); sync({ manual: true }); };
+$('e_amount').oninput = (e) => { S.draft.amount = e.target.value; syncHint(); };
+$('e_date').onchange = (e) => { S.draft.spent_on = e.target.value; };
+$('e_title').oninput = (e) => { S.draft.title = e.target.value; };
+document.querySelectorAll('.mask').forEach(m => m.onclick = (e) => { if (e.target === m) m.classList.remove('open'); });
+
+let toastTimer = null;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+/* 离线删除演示：点击待同步行可直接删除（仅本地待同步项） */
+$('ledger').onclick = (e) => {
+  const row = e.target.closest('.led[data-exp]');
+  if (!row) return;
+  const id = row.dataset.exp;
+  const op = S.queue.find(o => o.type === 'create' && o.clientId === id);
+  if (!op) { toast('已同步的流水不可在离线态删除（见设计文档 §8）'); return; }
+  S.queue.push(newOp('delete', id, { category: op.payload.category, amount: op.payload.amount, title: op.payload.title }));
+  log(`－ 已入队删除：${opLabel(op)}（若该笔从未同步，同步时会被本地消解，不发网络请求）`, 'warn');
+  render();
+};
+
+reset();
+
+/* 供自动化验证脚本读取内部状态（原型专用；生产实现不导出内部状态）。
+   断言只读状态，交互仍走真实 UI 路径，避免「测的是函数不是界面」。 */
+window.__proto = {
+  state: () => S,
+  project,
+  sync,
+  reset,
+  queueLen: () => S.queue.length,
+  serverLen: () => S.server.length,
+  pendingRows: () => project().filter(r => r.pending).length,
+  barText: () => ($('offlineBar').classList.contains('show') ? $('barText').textContent : ''),
+  logText: () => S.log.map(l => l.text).join('\n')
+};
+</script>
+</body>
+</html>
