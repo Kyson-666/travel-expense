@@ -334,7 +334,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 .offline-bar.blocked{background:#fdece8;color:var(--danger)}
 .offline-bar svg{width:16px;height:16px;flex:0 0 auto}
 .offline-spacer{flex:1}
-.offline-bar button{background:transparent;border:1px solid currentColor;color:inherit;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit}
+.offline-bar button{background:transparent;border:1px solid currentColor;color:inherit;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;font-family:inherit;flex:0 0 auto;white-space:nowrap;min-height:36px}
+.offline-bar #offlineText{min-width:0}
 .offline-spin{animation:offline-spin 1s linear infinite}
 @media(prefers-reduced-motion:reduce){.offline-spin{animation:none}}
 @keyframes offline-spin{to{transform:rotate(360deg)}}
@@ -343,25 +344,25 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 .offline-panel-card{background:#fff;width:100%;max-width:620px;max-height:82vh;overflow-y:auto;border-radius:20px 20px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));box-shadow:var(--shadow)}
 .offline-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .offline-panel-head b{font-size:18px;margin-right:8px}
-.offline-panel-head button{border:0;background:transparent;font-size:24px;color:var(--muted);cursor:pointer}
+.offline-panel-head button{border:0;background:transparent;font-size:24px;color:var(--muted);cursor:pointer;min-width:40px;min-height:40px;line-height:1;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
 .offline-queue-item{display:flex;align-items:center;gap:10px;padding:10px 8px;border:1px solid var(--line);border-radius:10px;margin:7px 0;flex-wrap:wrap}
 .offline-queue-main{flex:1;min-width:0}
 .offline-queue-title{font-weight:600;font-size:13px;overflow-wrap:anywhere}
 .offline-queue-detail{font-size:12px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
 .offline-queue-actions{display:flex;gap:6px;flex:0 0 auto}
-.offline-queue-actions button{border:1px solid var(--line);background:#fff;border-radius:8px;color:var(--muted);padding:5px 8px;font-size:12px;font-family:inherit;cursor:pointer}
+.offline-queue-actions button{border:1px solid var(--line);background:#fff;border-radius:8px;color:var(--muted);padding:8px 12px;font-size:12.5px;font-family:inherit;cursor:pointer;min-height:36px;white-space:nowrap}
 .offline-queue-actions button:disabled{opacity:.5}
 .offline-queue-actions button[data-keep]{border-color:var(--primary);color:var(--primary-d)}
 .offline-panel-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted)}
-.offline-panel-foot button{border:1px solid var(--line);background:#fff;border-radius:8px;color:var(--muted);padding:5px 8px;font-size:12px;font-family:inherit;cursor:pointer;flex:0 0 auto}
+.offline-panel-foot button{border:1px solid var(--line);background:#fff;border-radius:8px;color:var(--muted);padding:8px 12px;font-size:12.5px;font-family:inherit;cursor:pointer;flex:0 0 auto;min-height:36px;white-space:nowrap}
 .offline-queue-empty{padding:22px 8px;text-align:center;color:var(--muted);font-size:13px}
 .offline-panel-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 /* ---------- PWA 安装引导（阶段 3） ---------- */
 .install-bar{display:none;align-items:center;gap:10px;padding:9px 12px;background:#eafaf4;border-bottom:1px solid var(--line);font-size:13px;color:#1f6d57}
 .install-bar.show{display:flex}
 .install-bar .install-text{flex:1;min-width:0}
-.install-bar button{border:1px solid currentColor;background:transparent;color:inherit;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit}
-.install-bar #installNo{border:0;font-size:16px;padding:2px 6px;line-height:1}
+.install-bar button{border:1px solid currentColor;background:transparent;color:inherit;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;font-family:inherit;min-height:36px;white-space:nowrap;flex:0 0 auto}
+.install-bar #installNo{border:0;font-size:18px;padding:0;line-height:1;min-width:36px;display:inline-flex;align-items:center;justify-content:center}
 .led.pending{border-style:dashed;background:#fffdf7}
 .led.pending .amt{color:var(--muted)}
 .pill-pending{background:#fff4e5;color:#8a6100}

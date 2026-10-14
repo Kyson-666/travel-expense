@@ -322,6 +322,38 @@ async function main() {
     fs.mkdirSync(outDir, { recursive: true });
     fs.writeFileSync(path.join(outDir, 'offline-e2e-final.png'), Buffer.from(shot.result.data, 'base64'));
     console.log('  ℹ 截图：.te_test/offline-e2e-final.png');
+
+    /* ---------- H. 移动端适配（360 宽） ---------- */
+    section('H. 移动端适配（360 宽：无横向溢出 + 触控目标 ≥36px）');
+    await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 1, mobile: false });
+    await sleep(300);
+    /* 溢出基准必须用 documentElement.clientWidth（窗口宽度会随内容扩大而掩盖溢出） */
+    const mobMeasure = () => ev(`(() => {
+      const de = document.documentElement, w = de.clientWidth;
+      const over = [];
+      document.querySelectorAll('body *').forEach(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && (r.right > w + 1 || r.left < -1)) over.push((el.className || el.id || el.tagName).toString().slice(0, 40));
+      });
+      const small = [...document.querySelectorAll('#offlineBar button, #offlinePanel button, .install-bar button, .offline-queue-actions button')]
+        .filter(b => b.getClientRects().length)
+        .filter(b => b.getBoundingClientRect().height < 36)
+        .map(b => ({ t: b.textContent.trim().slice(0, 8), h: Math.round(b.getBoundingClientRect().height) }));
+      return { vw: w, docOverflow: de.scrollWidth > w, over: over.slice(0, 6), small };
+    })()`);
+    const winH = await beginOffline();
+    await waitFor(`document.getElementById('offlineBar').classList.contains('show')`, 6000);
+    await addExpenseViaUI(66, '餐饮', '移动端待同步');
+    await waitFor(`document.querySelectorAll('#d_body .led.pending').length >= 1`, 8000);
+    await ev(`document.getElementById('offlineAction').click()`);
+    await waitFor(`document.getElementById('offlinePanel').classList.contains('open')`, 5000);
+    const m1 = await mobMeasure();
+    check('H1 移动端（360）无横向溢出', !m1.docOverflow && m1.over.length === 0, m1);
+    check('H2 离线 UI 触控目标均 ≥36px', m1.small.length === 0, m1.small);
+    await captureShot('shot-offline-mobile.png');
+    await ev(`document.getElementById('offlineClose').click()`);
+    await endOffline(winH);
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     try { if (ws) ws.close(); } catch (e) { /* ignore */ }
     chrome.kill();
