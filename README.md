@@ -23,7 +23,7 @@
 | **数据隔离** | 每位用户仅见自己的路线；系统示例（`is_seed=1`）全员可见但普通用户只读 |
 | **AI 行程规划** | 配好 AI 接口后（管理后台 → AI 配置），路线编辑页可一键生成按天行程；**同时产出「注意事项」与「美食推荐」并自动写入备注**（备注已有内容时追加，不覆盖你自己的备注）；支持对话式多轮调整 |
 | **管理后台** | 平台总览、用户管理（在线/封禁/提权）、邮件服务器配置、站点设置（开放注册/站名/公告/本位币）、AI 配置、**数据库备份下载**、操作审计日志 |
-| **自适应** | 手机单列、PC 多列；浏览器可「添加到主屏幕」；PWA 支持离线查看已缓存路线/流水、离线新增流水、联网自动同步（安卓壳无需重装 APK，需先升级服务端） |
+| **自适应** | 手机单列、PC 多列；浏览器可「添加到主屏幕」；PWA 支持离线查看已缓存路线/流水、离线新增流水、联网自动同步（安卓壳无需重装 APK，需先升级服务端）；安卓 APP 内置**自动更新**——有新版安装包时提示一键安装，否则保持静默热更新 |
 | **强健性与安全** | 会话服务端 30 天滑动 TTL（过期自动失效）；登录限流（IP + 账户名，含 IP 全局限流 30 次 / 10 分钟）；实时汇率可配置 API 定时刷新（兜底静态表）；`/health` 含 DB 探活（DB 故障返 503）；访问日志 + 优雅关闭（SIGTERM/SIGINT）；CSP / X-Frame-Options / Referrer-Policy / HSTS 安全头；封禁用户时清除其分享令牌 |
 
 技术特性：后端 Node 原生 `http`（零框架）+ `better-sqlite3`（唯一原生依赖）；前端原生 ES Modules 无构建，**由后端内置托管**（单容器部署，端口 3000 直出）；密码 `scrypt` 加盐哈希；验证码 CSPRNG 生成；写操作 CSRF 同源校验。
@@ -78,6 +78,14 @@
 ---
 
 ## 📌 版本变更记录
+
+### v1.1.5（2026-10-15）
+**新增安卓 APP 内自动更新**（有新安装包时提示一键安装，无则照旧静默热更新），并**改用固定的正式签名**，修复「升级必须先卸载」的顽疾：
+- **APP 内自动更新**：启动时一次请求同时返回 web 指纹与安装包版本；有新版 → 后台下载 + sha256 校验 → 应用内弹窗一键安装（**覆盖安装保留数据与本地待同步队列**）；无更新 → 完全静默。选「稍后」按版本号记忆，出现更新版本才会再次提示。
+- **管理后台 → APP 更新**：上传 / 删除服务端安装包（自托管分发，不必去 GitHub 下载）；上传时同时选中 CI 产出的 `app-release.json` 可自动填版本号。
+- **改用固定正式签名**：此前 CI 每次构建生成不同的 debug 签名，导致 APK 无法覆盖安装（升级必须先卸载，且会清空本地待同步队列）。⚠️ v1.1.4 及以前用户的升级需先卸载一次，此后可一直平滑升级。
+- 服务端新增公开下载端点 `GET /api/app/apk`（支持 Range 断点续传）；`/api/app/manifest` 增加 `apk` 字段（无安装包更新时为 `null`，APP 端完全静默）。
+- 测试：`smoke-offline` 新增 APK 分发链路用例（上传权限 / 流式上传 / Range / 删除 / 失败不影响线上），全量 **14 个脚本**、E2E **39 条断言**全绿。
 
 ### v1.1.4（2026-10-14）
 
@@ -271,11 +279,25 @@ node app.js            # 默认端口 3000；后端自动托管 public/ 前端�
 把网页版打包成手机原生 APP：桌面常驻图标、离线可开 UI、登录后像原生应用一样使用。APP 通过 `fetch` **直连你自托管的服务器**，数据仍全在你自己的服务器上，APP 本身不另存数据。
 
 ### 快速使用（已发布 APK）
-- **下载**：[`app-debug.apk`（v1.1.3）](https://github.com/hanyuestar/travel-expense/releases/download/v1.1.3/app-debug.apk)
-- 备用地址：<https://github.com/hanyuestar/travel-expense/releases/tag/v1.1.3>
+- **下载**：[`app-release.apk`（v1.1.5）](https://github.com/hanyuestar/travel-expense/releases/download/v1.1.5/app-release.apk)
+- 备用地址：<https://github.com/hanyuestar/travel-expense/releases/tag/v1.1.5>
 - 手机允许「未知来源」安装后打开即可——**服务器地址已内置，打开即用，无需填写**。
 
 > 该发布包已内置作者服务器地址；若你用自己的服务器，请按下面「自己构建」重新打包。
+
+### APP 内自动更新（v1.1.5 起）
+启动时 APP 拉取服务端更新清单，一次请求同时携带 **web 层指纹**与**安装包版本**，按结果分两路处理：
+
+| 情形 | 行为 |
+|---|---|
+| 安装包无更新 | 与此前完全一致：**静默热更新** web 层（全量下载 + sha256 逐文件校验 + 原子替换），无感 |
+| 有新版安装包 | 后台下载新 APK → sha256 校验 → 应用内弹窗「发现新版本」→ 点「立即安装」拉起系统安装器（**覆盖安装，数据与本地待同步队列保留**） |
+
+- 在「**管理后台 → APP 更新**」上传新版 `app-release.apk`（可同时选中 CI 产出的 `app-release.json` 自动填版本号）即可让 APP 提示更新。
+- Android 不允许应用静默安装：系统安装器里需用户确认一次；首次会引导开启「允许安装未知应用」。
+- 点「稍后」会记住该版本号，出现更新的版本时才会再次提示。
+
+> ⚠️ **签名变更（一次性代价）**：v1.1.5 起改用固定的正式签名密钥（此前 CI 每次构建生成不同的 debug 签名，导致 APK 无法覆盖安装，只能卸载重装）。已安装 v1.1.4 及更早版本的用户，**升级到本版需先卸载旧版**；此后即可一直平滑升级。
 
 ### 自己构建
 前置：Node 18+、**JDK 17**、Android SDK（cmdline-tools + `platforms;android-34` + `build-tools;34.0.0`）。
@@ -288,6 +310,7 @@ npm run sync                                     # 拷贝 public/ 进安卓资�
 npm run build                                    # 产物：android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
+> - 正式签名构建（CI 同款）：配置环境变量 `TE_KEYSTORE_FILE` / `TE_KEYSTORE_PASSWORD` / `TE_KEY_ALIAS` 后执行 `./gradlew assembleRelease`；未配置时回退 debug 签名，本地构建不受影响。
 > - 内置地址写入 `android/app/src/main/assets/public/index.html`（`<script>window.TE_BUILTIN_SERVER="..."</script>`），**不会进入公开仓库**（`.te-server-url` 已被 gitignore）。
 > - 原生定制（第三方 Cookie 放行 + 按主机放行的 SSL 处理）由 `npm run sync` 自动通过 `scripts/patch-native.mjs` 注入生成的 `MainActivity.java`，无需手工改原生工程；详见 `android-app/README.md`。
 

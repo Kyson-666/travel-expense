@@ -1,15 +1,19 @@
 name: Build Android APK
 
-# 手动触发：构建旅行经费工作台安卓 APK 并发布到指定 Release（默认 v1.1.0）。
+# 手动触发：构建旅行经费工作台安卓 APK（正式 release 签名）并发布到指定 Release。
 # 内置服务器地址来自加密 Secret TE_SERVER_URL（个人域名不进入仓库源码/日志）。
-# 注意：本流程只替换 Release 上的 app-debug.apk 资产，不动 git tag。
-# 前置：目标 Release 必须已存在。本仓库没有自动创建 Release 的工作流，
-#       发版时需先为 tag 建 Release，再手动触发本流程上传 APK。
+# 签名：keystore（PKCS12）以 base64 存于 Secret ANDROID_KEYSTORE_BASE64，构建时解码到 runner 临时目录；
+#       密码与别名来自 ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS，
+#       由 android-app/scripts/patch-native.mjs 注入的 signingConfigs 读取（无 keystore 时回退 debug，便于本地构建）。
+# ⚠️ 签名必须长期保持不变：更换签名 = 用户无法覆盖安装（只能卸载重装，且会清空本地待同步队列）。
+# 产物：app-release.apk（正式签名包）+ app-release.json（versionCode/versionName/sha256/size，
+#       供「管理后台 → APP 更新」上传时自动填版本，同时写进 Job Summary）。
+# 前置：目标 Release 必须已存在（本仓库无自动建 Release 的工作流）。
 on:
   workflow_dispatch:
     inputs:
       apk_asset_tag:
-        description: '目标 Release tag（APK 将作为该 Release 的 app-debug.apk 资产）'
+        description: '目标 Release tag（APK 将作为该 Release 的 app-release.apk 资产）'
         required: false
         default: 'v1.1.0'
 
@@ -47,29 +51,72 @@ jobs:
       - name: Install SDK packages
         run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Install deps, sync assets, build APK
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "缺少 Secret ANDROID_KEYSTORE_BASE64，无法产出正式签名包"; exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/te-release.p12"
+          echo "keystore 已解码：$(wc -c < "$RUNNER_TEMP/te-release.p12") 字节"
+
+      - name: Install deps, sync assets, build signed release APK
         working-directory: android-app
+        env:
+          TE_KEYSTORE_FILE: ${{ runner.temp }}/te-release.p12
+          TE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           npm install
           npx cap add android || true
           npm run sync
           cd android
           chmod +x ./gradlew || true
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
-      - name: Verify APK produced
-        run: ls -la android-app/android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify signature + build metadata
+        working-directory: android-app
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          ls -la "$APK"
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$APK" | head -8
+          BADGING=$("$ANDROID_HOME"/build-tools/34.0.0/aapt2 dump badging "$APK")
+          VC=$(printf '%s' "$BADGING" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1)
+          VN=$(printf '%s' "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
+          SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$APK")
+          printf '{\n  "versionCode": %s,\n  "versionName": "%s",\n  "sha256": "%s",\n  "size": %s\n}\n' "$VC" "$VN" "$SHA" "$SIZE" > app-release.json
+          cat app-release.json
+          {
+            echo "## APK 产物（发布用）"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| versionCode | \`$VC\` |"
+            echo "| versionName | \`$VN\` |"
+            echo "| 大小（字节） | \`$SIZE\` |"
+            echo "| sha256 | \`$SHA\` |"
+            echo ""
+            echo "> 在「管理后台 → APP 更新」里同时选择 app-release.apk 与 app-release.json 即可自动填版本号。"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: android-app/android/app/build/outputs/apk/debug/app-debug.apk
+          name: app-release-apk
+          path: |
+            android-app/android/app/build/outputs/apk/release/app-release.apk
+            android-app/app-release.json
 
-      - name: Publish APK to Release
+      - name: Publish APK + metadata to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ inputs.apk_asset_tag }}" \
-            android-app/android/app/build/outputs/apk/debug/app-debug.apk \
+          TAG="${{ inputs.apk_asset_tag }}"
+          gh release upload "$TAG" \
+            android-app/android/app/build/outputs/apk/release/app-release.apk \
+            android-app/app-release.json \
             --clobber --repo hanyuestar/travel-expense
+          # 清掉旧命名的 debug 包，避免用户下错
+          gh release delete-asset "$TAG" app-debug.apk --yes --repo hanyuestar/travel-expense || true

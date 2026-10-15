@@ -7,6 +7,7 @@ const NAV = [
   ['ai', 'AI 配置', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v1a3 3 0 0 1-3 3h-1v1a4 4 0 0 1-8 0v-1H7a3 3 0 0 1-3-3v-1a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="11" r="1"/><circle cx="15" cy="11" r="1"/></svg>'],
   ['email', '邮件配置', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/></svg>'],
   ['site', '站点设置', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
+  ['app', 'APP 更新', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>'],
   ['audit', '审计日志', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>']
 ];
 
@@ -45,6 +46,7 @@ function loadAdminPage(seg) {
   else if (seg === 'ai') renderAiConfig(box);
   else if (seg === 'email') renderEmail(box);
   else if (seg === 'site') renderSite(box);
+  else if (seg === 'app') renderAppUpdate(box);
   else if (seg === 'audit') renderAudit(box);
   else box.innerHTML = '<div class="empty">页面不存在</div>';
 }
@@ -71,6 +73,7 @@ async function renderOverview(box) {
           <button class="btn btn-line" data-goto="email">邮件配置</button>
           <button class="btn btn-line" data-goto="site">站点设置</button>
           <button class="btn btn-line" data-goto="audit">审计日志</button>
+          <button class="btn btn-line" data-goto="app">APP 更新</button>
           <button class="btn btn-line" id="adminExportBtn">导出全站 CSV</button>
           <button class="btn btn-line" id="adminBackupBtn">备份数据库</button>
         </div>
@@ -102,6 +105,106 @@ async function renderOverview(box) {
       } catch (e) { toast('导出失败：' + e.message); }
     };
   } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ---------- APP 更新（安卓安装包分发：APP 端自更新的数据源） ---------- */
+async function renderAppUpdate(box) {
+  let data;
+  try { data = await api.get('/admin/apk'); }
+  catch (e) { box.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; return; }
+  const info = data && data.apk;
+  const maxSize = (data && data.maxSize) || 0;
+  const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+  box.innerHTML = `
+    <h2>APP 更新</h2>
+    <div class="panel">
+      <h3>服务端当前的安卓安装包</h3>
+      ${info ? `
+        <div class="kv"><span class="k">版本</span><span class="v">${esc(info.versionName || '未命名')}（versionCode ${info.versionCode}）</span></div>
+        <div class="kv"><span class="k">大小 / 发布时间</span><span class="v">${mb(info.size)} · ${info.publishedAt ? fmtTime(info.publishedAt) : '—'}</span></div>
+        <div class="kv"><span class="k">sha256</span><span class="v" style="font-size:12px;word-break:break-all">${esc(info.sha256)}</span></div>
+        ${info.notes ? `<div class="kv"><span class="k">更新说明</span><span class="v">${esc(info.notes)}</span></div>` : ''}
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-line btn-sm" id="apkDownload">下载当前 APK</button>
+          <button class="btn btn-danger btn-sm" id="apkDelete">删除（APP 端将不再提示更新）</button>
+        </div>` : `
+        <div class="empty">尚未上传 APK —— 此时 APP 端不会提示原生包更新，只走 web 层静默热更新。</div>`}
+    </div>
+    <div class="panel">
+      <h3>上传新版 APK</h3>
+      <div class="hint" style="margin-bottom:10px">
+        从 GitHub Release 下载 <b>app-release.apk</b>；若一并选中同批的 <b>app-release.json</b> 会自动填写版本号。
+        versionCode 必须<b>大于</b>用户设备已装版本，APP 才会弹更新提示。单文件上限 ${mb(maxSize)}。
+      </div>
+      <div class="field"><label>APK 文件 <span class="hint">可同时选 .json 自动填版本</span></label>
+        <input type="file" id="apkFile" accept=".apk,.json,application/vnd.android.package-archive" multiple></div>
+      <div class="field"><label>versionCode <span class="hint">整数，见 Release 说明或构建日志</span></label>
+        <input id="apkVc" inputmode="numeric" placeholder="例如 10007"></div>
+      <div class="field"><label>版本名 <span class="hint">展示给用户</span></label>
+        <input id="apkVn" placeholder="例如 1.0.7"></div>
+      <div class="field"><label>更新说明 <span class="hint">可选，会显示在 APP 的更新弹窗中</span></label>
+        <input id="apkNotes" placeholder="例如：新增 APP 内自动更新"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px">
+        <button class="btn btn-primary" id="apkUpload">上传并生效</button>
+      </div>
+    </div>`;
+
+  const fileEl = box.querySelector('#apkFile');
+  const vcEl = box.querySelector('#apkVc');
+  const vnEl = box.querySelector('#apkVn');
+  const notesEl = box.querySelector('#apkNotes');
+  let apkBlob = null;
+
+  fileEl.onchange = async () => {
+    apkBlob = null;
+    const files = Array.from(fileEl.files || []);
+    const apk = files.find(f => /\.apk$/i.test(f.name));
+    const meta = files.find(f => /\.json$/i.test(f.name));
+    if (apk) apkBlob = apk;
+    if (meta) {
+      try {
+        const j = JSON.parse(await meta.text());
+        if (j.versionCode) vcEl.value = String(j.versionCode);
+        if (j.versionName) vnEl.value = String(j.versionName);
+        if (j.notes && !notesEl.value) notesEl.value = String(j.notes).slice(0, 200);
+        toast('已从 ' + meta.name + ' 读取版本信息');
+      } catch (e) { toast('元数据文件解析失败：' + e.message); }
+    }
+  };
+
+  if (box.querySelector('#apkDownload')) {
+    box.querySelector('#apkDownload').onclick = () => { location.href = '/api/app/apk'; };
+  }
+  if (box.querySelector('#apkDelete')) {
+    box.querySelector('#apkDelete').onclick = async () => {
+      if (!confirm('删除服务端 APK？删除后 APP 端不再提示原生包更新（已装的 APP 不受影响）。')) return;
+      try { await api.del('/admin/apk'); toast('已删除'); renderAppUpdate(box); }
+      catch (e) { toast('删除失败：' + e.message); }
+    };
+  }
+  box.querySelector('#apkUpload').onclick = async () => {
+    if (!apkBlob) return toast('请先选择 .apk 文件');
+    const vc = parseInt(vcEl.value, 10) || 0;
+    if (!(vc > 0)) return toast('请填写正确的 versionCode（正整数）');
+    const btn = box.querySelector('#apkUpload');
+    btn.disabled = true;
+    btn.textContent = '上传中…';
+    try {
+      const qs = new URLSearchParams({ versionCode: String(vc), versionName: vnEl.value.trim(), notes: notesEl.value.trim() });
+      const r = await fetch('/api/admin/apk?' + qs.toString(), {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/octet-stream' }, body: apkBlob
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((j && j.msg) || ('上传失败 (' + r.status + ')'));
+      toast('已上传 versionCode ' + vc + '，APP 端下次启动将提示更新');
+      renderAppUpdate(box);
+    } catch (e) {
+      toast('上传失败：' + e.message);
+      btn.disabled = false;
+      btn.textContent = '上传并生效';
+    }
+  };
 }
 
 /* ---------- 用户管理 ---------- */

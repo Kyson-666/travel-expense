@@ -5,7 +5,13 @@
  * 3. 对可信主机放行 SSL 错误（自签名 / 证书链不完整，如 Synology NAS）；
  * 4. web 层热更新：启动加载 files/www 已下载版本，后台拉 /api/app/manifest 比对指纹，
  *    全量下载到 www-new 并逐文件 sha256 校验，原子替换后 setServerBasePath 热刷新。
- * 若 MainActivity.java 已含标记则跳过（不覆盖用户改动）。
+ * 5. APK 自更新：manifest 内含更高 versionCode 时后台下载 APK 并校验 sha256，
+ *    弹窗由用户确认后经 FileProvider 拉起系统安装器（Android 不允许非系统应用静默安装）；
+ *    web 层热更新逻辑不变，无新 APK 时完全静默。
+ * 6. 版本号注入：versionCode/versionName 由 android-app/package.json 的 version 推导。
+ * 7. 签名与权限：注入 release signingConfigs（读 CI 注入的 TE_KEYSTORE_* 环境变量）
+ *    与 REQUEST_INSTALL_PACKAGES 权限。
+ * MainActivity 已含标记时跳过写入（不覆盖用户改动）；gradle/manifest 补丁始终幂等执行。
  * 注意：content 使用 String.raw，Java 中的反斜杠（\n、\"、\\）原样保留，无需双写。 */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -13,20 +19,30 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const target = join(root, 'android/app/src/main/java/com/hanyuestar/travelexpense/MainActivity.java');
-const MARKER = '// TE_NATIVE_PATCHED';
+const MARKER = '// TE_NATIVE_PATCHED_V2';
+const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 
+let needWriteJava = true;
 if (existsSync(target)) {
   const cur = readFileSync(target, 'utf8');
   if (cur.includes(MARKER)) {
-    console.log('[patch-native] MainActivity 已包含定制，跳过（如需强制重写请先删除该文件）');
-    process.exit(0);
+    needWriteJava = false;
+    console.log('[patch-native] MainActivity 已是最新定制，跳过写入');
+  } else {
+    console.log('[patch-native] MainActivity 为旧版/未定制，将覆盖写入新版');
   }
-  console.log('[patch-native] 发现未定制的 MainActivity，将覆盖写入定制版本');
 }
 
 const content = String.raw`package com.hanyuestar.travelexpense;
-// TE_NATIVE_PATCHED
+// TE_NATIVE_PATCHED_V2
 
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
+import android.os.Build;
+import android.provider.Settings;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Bundle;
@@ -35,6 +51,8 @@ import android.webkit.CookieManager;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebView;
 import android.widget.Toast;
+
+import androidx.core.content.FileProvider;
 
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
@@ -82,6 +100,10 @@ public class MainActivity extends BridgeActivity {
     private String serverBaseUrl = "";
     private String builtinServerUrl = "";
     private SSLSocketFactory trustAllFactory = null;
+
+    /* 5. APK 自更新：与 web 热更新共用一次 manifest 请求 */
+    private static final String PREF_APK = "te_app_update";
+    private volatile int pendingApkVersion = 0;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -191,6 +213,10 @@ public class MainActivity extends BridgeActivity {
             JSONObject envelope = new JSONObject(manifestJson);
             JSONObject remote = envelope.optJSONObject("data");
             if (remote == null) remote = envelope; // 兼容直接返回 manifest 的情况
+
+            /* APK 自更新：无更高 versionCode 时完全静默，不影响下面的 web 热更新 */
+            checkApkUpdate(remote.optJSONObject("apk"));
+
             final String remoteVersion = remote.optString("version", "");
             if (remoteVersion.isEmpty()) { Log.w(TAG, "manifest 缺少 version，跳过"); return; }
 
@@ -254,6 +280,108 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception e) {
             Log.w(TAG, "热更新检查失败（保留当前版本）: " + e.getMessage());
             deleteRecursive(wwwNewDir());
+        }
+    }
+
+    /* ================= 5. APK 自更新（原生包） =================
+     * 只有服务端提供更高 versionCode 的 APK 时才提示，否则完全静默（web 层继续热更新）。
+     * Android 不允许非系统应用静默安装，故流程为：
+     * 后台下载 + sha256 校验 → 应用内弹窗 → 用户点「立即安装」→ 系统安装器确认一次。
+     * 覆盖安装保留应用数据（本地待同步队列不丢）；选「稍后」按版本号记忆，不再重复打扰。 */
+    private void checkApkUpdate(JSONObject apk) {
+        if (apk == null) return;
+        try {
+            final int remoteVc = apk.optInt("versionCode", 0);
+            final String remoteVn = apk.optString("versionName", "");
+            final String expectSha = apk.optString("sha256", "");
+            final long size = apk.optLong("size", 0);
+            final String notes = apk.optString("notes", "");
+            if (remoteVc <= 0) return;
+
+            int localVc = 0;
+            try {
+                PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+                localVc = pi.versionCode;
+            } catch (Exception ignore) { }
+
+            File cached = new File(getCacheDir(), "te-update.apk");
+            if (remoteVc <= localVc) {
+                if (cached.exists()) cached.delete();
+                Log.i(TAG, "APK 已是最新（本机 " + localVc + " / 服务端 " + remoteVc + "）");
+                return;
+            }
+            SharedPreferences sp = getSharedPreferences(PREF_APK, MODE_PRIVATE);
+            if (sp.getInt("skipped_version", 0) >= remoteVc) {
+                Log.i(TAG, "用户已忽略该版本，跳过提示: " + remoteVc);
+                return;
+            }
+
+            byte[] data = httpGetBytes(serverBaseUrl + "/api/app/apk");
+            String actual = sha256Hex(data);
+            if (expectSha != null && !expectSha.isEmpty() && !actual.equalsIgnoreCase(expectSha)) {
+                Log.e(TAG, "APK sha256 校验失败（期望 " + expectSha + " / 实际 " + actual + "），已放弃本次更新");
+                return;
+            }
+            if (size > 0 && data.length != size) {
+                Log.e(TAG, "APK 大小不符（期望 " + size + " / 实际 " + data.length + "），已放弃本次更新");
+                return;
+            }
+            writeBytes(cached, data);
+            Log.i(TAG, "新 APK 已下载: " + cached.getAbsolutePath() + "（" + data.length + " 字节）");
+            promptApkInstall(cached, remoteVc, remoteVn, data.length, notes);
+        } catch (Exception e) {
+            Log.w(TAG, "APK 更新检查失败（保留当前版本，下次启动重试）: " + e.getMessage());
+        }
+    }
+
+    private void promptApkInstall(final File apkFile, final int remoteVc, final String remoteVn, final long size, final String notes) {
+        pendingApkVersion = remoteVc;
+        final String mb = String.format(Locale.CHINA, "%.1f", size / 1048576.0);
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                try {
+                    String msg = "版本 " + remoteVn + "（" + mb + " MB）已下载完成，覆盖安装不会影响你的数据。"
+                        + (notes == null || notes.isEmpty() ? "" : "\n\n" + notes);
+                    new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("发现新版本")
+                        .setMessage(msg)
+                        .setPositiveButton("立即安装", new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) { installApk(apkFile); }
+                        })
+                        .setNegativeButton("稍后", new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                getSharedPreferences(PREF_APK, MODE_PRIVATE).edit()
+                                    .putInt("skipped_version", pendingApkVersion).apply();
+                                Log.i(TAG, "用户选择稍后，该版本不再提示: " + pendingApkVersion);
+                            }
+                        })
+                        .setCancelable(false)
+                        .show();
+                } catch (Exception e) {
+                    Log.e(TAG, "APK 更新提示失败", e);
+                }
+            }
+        });
+    }
+
+    /* 拉起系统安装器（用户需在安装器里确认一次；未授权时先引导到本应用的授权页） */
+    private void installApk(File apkFile) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+                Toast.makeText(this, "请先允许「旅行经费台」安装应用，再回来完成更新", Toast.LENGTH_LONG).show();
+                Intent s = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+                s.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(s);
+                return;
+            }
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", apkFile);
+            Intent it = new Intent(Intent.ACTION_VIEW);
+            it.setDataAndType(uri, "application/vnd.android.package-archive");
+            it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(it);
+        } catch (Exception e) {
+            Log.e(TAG, "拉起安装器失败", e);
+            Toast.makeText(this, "拉起安装器失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -402,6 +530,78 @@ if (!content.includes(MARKER)) {
   console.error('[patch-native] 安全校验失败：生成内容缺少标记，中止');
   process.exit(1);
 }
-mkdirSync(dirname(target), { recursive: true });
-writeFileSync(target, content, 'utf8');
-console.log('[patch-native] MainActivity.java 已写入（第三方Cookie + 可信主机SSL放行 + web热更新）');
+if (needWriteJava) {
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, content, 'utf8');
+  console.log('[patch-native] MainActivity.java 已写入（Cookie + SSL 白名单 + web 热更新 + APK 自更新）');
+}
+
+/* ---------- 6. build.gradle：版本号（由 package.json 推导）+ release 签名 ---------- */
+function patchBuildGradle() {
+  const bp = join(root, 'android/app/build.gradle');
+  if (!existsSync(bp)) { console.log('[patch-native] 未找到 app/build.gradle，跳过（先跑 cap add android）'); return; }
+  let g = readFileSync(bp, 'utf8');
+  const parts = String(pkgVersion).split('.').map((n) => parseInt(n, 10) || 0);
+  const vc = (parts[0] || 0) * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
+  const before = g;
+  g = g.replace(/versionCode\s+\d+/, 'versionCode ' + vc);
+  g = g.replace(/versionName\s+"[^"]*"/, 'versionName "' + pkgVersion + '"');
+
+  if (!g.includes('// TE_SIGNING_PATCHED')) {
+    // 1) signingConfigs 块（插在 buildTypes 之前）
+    const signing = [
+      '',
+      '    // TE_SIGNING_PATCHED —— 由 scripts/patch-native.mjs 注入，随 cap sync 重生成，勿手改',
+      '    signingConfigs {',
+      '        release {',
+      '            def ksPath = System.getenv("TE_KEYSTORE_FILE")',
+      '            if (ksPath != null && !ksPath.isEmpty()) {',
+      '                storeType "PKCS12"',
+      '                storeFile file(ksPath)',
+      '                storePassword System.getenv("TE_KEYSTORE_PASSWORD")',
+      '                keyAlias System.getenv("TE_KEY_ALIAS")',
+      '                keyPassword System.getenv("TE_KEYSTORE_PASSWORD")',
+      '            }',
+      '        }',
+      '    }',
+      '',
+      ''
+    ].join('\n');
+    const btIdx = g.search(/^\s*buildTypes\s*\{/m);
+    if (btIdx < 0) { console.log('[patch-native] build.gradle 未找到 buildTypes，跳过签名注入'); return; }
+    g = g.slice(0, btIdx) + signing + g.slice(btIdx);
+    // 2) release buildType 挂上签名（缺 keystore 时回退 debug，避免本地出未签名包）
+    const btOpen = g.indexOf('buildTypes {');
+    const relIdx = g.indexOf('release {', btOpen);
+    if (relIdx > -1) {
+      const at = relIdx + 'release {'.length;
+      g = g.slice(0, at)
+        + '\n            // TE_SIGNING_PATCHED\n            signingConfig System.getenv("TE_KEYSTORE_FILE") != null ? signingConfigs.release : signingConfigs.debug'
+        + g.slice(at);
+    }
+  }
+  if (!g.includes('androidx.core:core:$androidxCoreVersion')) {
+    g = g.replace(/(\n\s*implementation project\(':capacitor-android'\))/,
+      '\n    implementation "androidx.core:core:$androidxCoreVersion"$1');
+  }
+  if (g !== before) { writeFileSync(bp, g, 'utf8'); console.log('[patch-native] build.gradle 已注入（versionCode=' + vc + ' / versionName=' + pkgVersion + ' / release 签名）'); }
+}
+
+/* ---------- 7. AndroidManifest：APK 自更新所需安装权限 ---------- */
+function patchAndroidManifest() {
+  const mp = join(root, 'android/app/src/main/AndroidManifest.xml');
+  if (!existsSync(mp)) { console.log('[patch-native] 未找到 AndroidManifest.xml，跳过'); return; }
+  let m = readFileSync(mp, 'utf8');
+  if (m.includes('REQUEST_INSTALL_PACKAGES')) return;
+  const anchor = /([ \t]*)<uses-permission android:name="android\.permission\.INTERNET"\s*\/>/;
+  if (!anchor.test(m)) { console.log('[patch-native] AndroidManifest 未找到 INTERNET 权限锚点，跳过'); return; }
+  m = m.replace(anchor,
+    '$1<uses-permission android:name="android.permission.INTERNET" />\n' +
+    '$1<!-- APP 内自动更新：允许拉起系统安装器安装已下载的新版 APK -->\n' +
+    '$1<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />');
+  writeFileSync(mp, m, 'utf8');
+  console.log('[patch-native] AndroidManifest 已加入 REQUEST_INSTALL_PACKAGES');
+}
+
+patchBuildGradle();
+patchAndroidManifest();

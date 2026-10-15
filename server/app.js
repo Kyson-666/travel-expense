@@ -13,6 +13,7 @@ const auth = require('./auth');
 const routesApi = require('./routes_api');
 const adminApi = require('./admin_api');
 const appBundle = require('./app_bundle');
+const appUpdate = require('./app_update');
 
 let db;
 try {
@@ -193,7 +194,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const manifest = appBundle.getManifest();
       accessLog(req, res, startMs, 200);
-      return send(res, 200, { ok: true, data: manifest });
+      /* 追加 apk 段：服务端未提供 APK 时为 null，APP 端据此完全静默、只走 web 热更新 */
+      return send(res, 200, { ok: true, data: Object.assign({}, manifest, { apk: appUpdate.apkInfo() }) });
     } catch (e) {
       console.error('[app-manifest error]', e);
       accessLog(req, res, startMs, 500);
@@ -213,6 +215,49 @@ const server = http.createServer(async (req, res) => {
     });
     accessLog(req, res, startMs, 200);
     return res.end(data);
+  }
+
+  /* APP 包（APK）自更新：公开流式下载 + 管理端上传/删除。
+   * 上传是原始字节流（APK 约 4MB，超过 readBody 的 2MB JSON 限制），
+   * 故这些端点必须在通用 /api/ 分支（含 readBody）之前处理。 */
+  if (url.pathname === '/api/app/apk' && (req.method === 'GET' || req.method === 'HEAD')) {
+    if (!appUpdate.apkInfo()) { accessLog(req, res, startMs, 404); return fail(res, 404, '服务端未提供 APK'); }
+    accessLog(req, res, startMs, 200);
+    return appUpdate.streamApk(req, res);
+  }
+  if (url.pathname === '/api/admin/apk') {
+    const admin = auth.authFromReq(req);
+    if (!admin) { accessLog(req, res, startMs, 401); return fail(res, 401, '请先登录', { code: 'UNAUTHORIZED' }); }
+    if (admin.role !== 'admin') { accessLog(req, res, startMs, 403); return fail(res, 403, '无权限', { code: 'FORBIDDEN' }); }
+    const apkIp = req.socket.remoteAddress || '';
+    if (req.method === 'GET') {
+      accessLog(req, res, startMs, 200);
+      return send(res, 200, { ok: true, data: { apk: appUpdate.apkInfo(), maxSize: appUpdate.MAX_APK } });
+    }
+    if (req.method === 'POST') {
+      try {
+        const r = await appUpdate.saveApkFrom(req, {
+          versionCode: url.query.versionCode,
+          versionName: url.query.versionName,
+          notes: url.query.notes
+        });
+        dbModule.audit(admin.id, 'upload_apk', 'app', 'apk',
+          '上传新版 APK（versionCode ' + r.versionCode + ' / ' + Math.round(r.size / 1048576) + ' MB）', apkIp);
+        accessLog(req, res, startMs, 200);
+        return send(res, 200, { ok: true, data: r });
+      } catch (e) {
+        accessLog(req, res, startMs, 400);
+        return fail(res, 400, e.message || '上传失败');
+      }
+    }
+    if (req.method === 'DELETE') {
+      const r = appUpdate.deleteApk();
+      if (r.deleted) dbModule.audit(admin.id, 'delete_apk', 'app', 'apk', '删除服务端 APK（APP 端不再提示更新）', apkIp);
+      accessLog(req, res, startMs, 200);
+      return send(res, 200, { ok: true, data: r });
+    }
+    accessLog(req, res, startMs, 405);
+    return fail(res, 405, '方法不支持');
   }
 
   /* API 路由 */

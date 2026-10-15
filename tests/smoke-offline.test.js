@@ -183,6 +183,65 @@ async function main() {
       check(`热更新清单包含新增文件 ${need}`, paths.includes(need), paths.length);
     }
     check('热更新清单 version 非空（变更可被检出）', !!bundle.json.data.version, bundle.json.data.version);
+
+    /* ================= APP 包（APK）自更新分发链路 ================= */
+    section('APP 包自更新（APK 分发 / 流式上传下载 / Range）');
+    const crypto = require('crypto');
+    const uploadApk = async (qs, buf, ck) => {
+      const res = await fetch(BASE + '/api/admin/apk' + qs, {
+        method: 'POST', headers: { Cookie: ck || '', 'Content-Type': 'application/octet-stream' }, body: buf
+      });
+      const text = await res.text();
+      let json = null; try { json = JSON.parse(text); } catch (e) { /* ignore */ }
+      return { status: res.status, json };
+    };
+
+    let mf = await req('GET', '/api/app/manifest', null, null);
+    check('未上传 APK 时 manifest.apk 为 null（APP 端完全静默）', mf.json.data.apk === null, mf.json.data.apk);
+    check('无 APK 时下载端点返回 404', (await fetch(BASE + '/api/app/apk')).status === 404);
+
+    r = await uploadApk('?versionCode=10007&versionName=1.0.7', Buffer.from('nope'), cookie);
+    check('普通用户上传 APK → 403', r.status === 403, r.status);
+    r = await uploadApk('?versionCode=0', Buffer.from('nope'), null);
+    check('未登录上传 APK → 401', r.status === 401, r.status);
+
+    const adm = await req('POST', '/api/auth/login', { login: 'admin', password: '123456' });
+    const adminCookie = adm.cookie;
+    check('管理员登录（种子账号）', adm.status === 200 && !!adminCookie, adm.status);
+
+    const fake = Buffer.alloc(256 * 1024 + 7, 0x5a);
+    const fakeSha = crypto.createHash('sha256').update(fake).digest('hex');
+    r = await uploadApk('?versionCode=10007&versionName=1.0.7&notes=PWA', fake, adminCookie);
+    check('管理员流式上传 APK → 200 且回传 sha256/大小', r.status === 200 && r.json.data.sha256 === fakeSha && r.json.data.size === fake.length, r.json && r.json.data);
+    check('上传后 versionCode/versionName 正确', r.json.data.versionCode === 10007 && r.json.data.versionName === '1.0.7', r.json.data);
+
+    mf = await req('GET', '/api/app/manifest', null, null);
+    const apk = mf.json.data.apk;
+    check('manifest.apk 含版本/哈希/大小/下载地址', !!apk && apk.versionCode === 10007 && apk.sha256 === fakeSha && apk.size === fake.length && apk.url === '/api/app/apk', apk);
+
+    let dl = await fetch(BASE + '/api/app/apk');
+    const dlBuf = Buffer.from(await dl.arrayBuffer());
+    check('下载端点返回完整 APK（字节一致 + 正确 Content-Type）',
+      dl.status === 200 && dlBuf.length === fake.length &&
+      crypto.createHash('sha256').update(dlBuf).digest('hex') === fakeSha &&
+      (dl.headers.get('content-type') || '').includes('android.package-archive'),
+      { status: dl.status, len: dlBuf.length, ct: dl.headers.get('content-type') });
+    check('下载响应带 Accept-Ranges（支持断点续传）', dl.headers.get('accept-ranges') === 'bytes');
+    dl = await fetch(BASE + '/api/app/apk', { headers: { Range: 'bytes=0-99' } });
+    const part = Buffer.from(await dl.arrayBuffer());
+    check('Range 请求返回 206 + 指定区间',
+      dl.status === 206 && part.length === 100 && (dl.headers.get('content-range') || '').startsWith('bytes 0-99/'),
+      { status: dl.status, len: part.length, cr: dl.headers.get('content-range') });
+
+    r = await uploadApk('?versionName=1.0.8', Buffer.from('x'), adminCookie);
+    check('缺少 versionCode → 400（拒绝非法元数据）', r.status === 400, { status: r.status, msg: r.json && r.json.msg });
+    mf = await req('GET', '/api/app/manifest', null, null);
+    check('上传失败不影响线上已有 APK', mf.json.data.apk && mf.json.data.apk.versionCode === 10007, mf.json.data.apk);
+
+    r = await req('DELETE', '/api/admin/apk', null, adminCookie);
+    check('管理员删除 APK → 200', r.status === 200 && r.json.data.deleted === true, r.json.data);
+    mf = await req('GET', '/api/app/manifest', null, null);
+    check('删除后 manifest.apk 回到 null', mf.json.data.apk === null, mf.json.data.apk);
   } finally {
     server.kill();
     setTimeout(() => fs.rmSync(DATA_DIR, { recursive: true, force: true }), 300);
