@@ -95,6 +95,7 @@ export class IndexedDBAdapter {
       tx.onerror = () => { if (!failed) reject(tx.error || new Error('IndexedDB 事务失败')); };
     });
   }
+  async all(name) { return this._request(name, 'readonly', (s) => s.getAll()); }
   get(name, key) { return this._request(name, 'readonly', s => s.get(key)); }
   put(name, value) { const key = value.key ?? value.op_id ?? value.k; return this._request(name, 'readwrite', s => s.put(value)).then(() => key); }
   delete(name, key) { return this._request(name, 'readwrite', s => s.delete(key)); }
@@ -281,6 +282,16 @@ class OfflineEngine {
     await this.store.put('cache_routes', { key, server_key: this.serverKey, user_id: currentUserId(), qs: q, data: clone(data), fetched_at: Date.now() });
   }
   async getRouteCache(qs) { this.refreshServerKey(); return this.store.get('cache_routes', `${cachePrefix(this.serverKey)}|${String(qs || '')}`); }
+  /* 离线筛选兜底：枚举当前用户在该服务端已缓存的路线列表快照（loadRoutes 精确 qs 未命中时
+   * 取 total 最大的一份做本地过滤）。无任何缓存返回 []。 */
+  async listRouteCaches() {
+    this.refreshServerKey();
+    const prefix = cachePrefix(this.serverKey) + '|';
+    const all = (await this.store.all('cache_routes')) || [];
+    return all
+      .filter((r) => r && r.user_id === currentUserId() && String(r.key || '').indexOf(prefix) === 0)
+      .map((r) => ({ qs: r.qs || '', data: r.data || {}, fetched_at: r.fetched_at || 0 }));
+  }
   async getMeta(name) {
     this.refreshServerKey();
     const row = await this.store.get('cache_meta', `${cachePrefix(this.serverKey)}|${name}`);

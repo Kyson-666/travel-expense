@@ -545,6 +545,7 @@ async function saveExpense() {
         if (!offline) throw new Error('本机离线存储不可用，无法安全保存待同步流水；请恢复网络后重试');
         /* clientId 在第一次在线尝试前已生成，失败入队沿用同一个 id，保证重放幂等。 */
         await offline.enqueueExpense(route.id, payload);
+        toast('网络异常，本笔已离线保存，恢复网络后自动同步');
       }
     }
   } catch (e) {

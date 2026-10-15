@@ -56,11 +56,42 @@ export async function loadRoutes() {
       state.total = cached.data.total || routes.length;
       state.pageSize = cached.data.pageSize || state.pageSize;
     } else {
-      toast(e.message);
-      routes = [];
-      state.total = 0;
+      /* 精确 qs 未命中（典型：离线切换年份 / 关键词）：退回最近一次缓存的全量快照，
+       * 由本地按「年份 + 关键词」过滤（口径对齐服务端查询），快照也没有才提示错误。 */
+      const snaps = offline ? await offline.listRouteCaches() : [];
+      const best = snaps.sort((a, b) =>
+        ((b.data && (b.data.total || (b.data.list || []).length)) || 0)
+        - ((a.data && (a.data.total || (a.data.list || []).length)) || 0))[0];
+      const list = best && best.data ? best.data.list : null;
+      if (list && list.length) {
+        routes = filterRoutesLocal(list);
+        state.total = routes.length;
+        state.page = 1;
+      } else {
+        toast(e.message);
+        routes = [];
+        state.total = 0;
+      }
     }
   }
+}
+
+/* 离线兜底的本地过滤（口径对齐服务端列表查询）：year 精确匹配、q 命中名称/目的地/景点、
+ * hideSeed 剔除示例路线，按出发时间倒序（与服务端排序权威一致）。 */
+function filterRoutesLocal(list) {
+  const year = state.filterYear && state.filterYear !== 'all' ? String(state.filterYear) : '';
+  const q = state.search.trim().toLowerCase();
+  const out = (list || []).filter((r) => {
+    if (store.hideSeed && r.is_seed) return false;
+    if (year && String(r.year || '') !== year) return false;
+    if (q) {
+      const hay = [r.name, r.dest, r.scenic].map((v) => String(v || '').toLowerCase());
+      if (!hay.some((v) => v.indexOf(q) > -1)) return false;
+    }
+    return true;
+  });
+  out.sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || '')));
+  return out;
 }
 
 /* 增删改导入后统一刷新：列表 + 全量年份胶囊 + 分页 + 统计。
@@ -326,9 +357,15 @@ export async function renderStats() {
   let summary;
   try { summary = await api.get('/routes/stats/summary' + (qs ? '?' + qs : '')); }
   catch (e) {
-    /* 离线期不弹红条：顶部离线状态条已表达该状态，且「请检查证书」类文案在用户明知离线时
-     * 属于误导与噪音；零散网络失败（在线但请求失败）仍照常提示。 */
-    if (!isNetworkError(e) || navigator.onLine) toast('统计加载失败：' + e.message);
+    /* 传输层失败（离线 / 服务器不可达 / 弱网超时）一律不弹红条：状态已由顶部离线条与既有数据
+     * 表达，且「请检查证书」类文案在离线场景属误导；真机上 navigator.onLine 常为 true（流量
+     * 开着但服务器不可达），故不能以它作为抑制条件。业务错误（401/403/500 等）仍照常提示。
+     * 另：若本次筛选与上次成功渲染的不同，清空统计卡，避免「全部」的旧数字被误读为当前年份。 */
+    const cardsEl = document.getElementById('statCards');
+    if (!isNetworkError(e)) toast('统计加载失败：' + e.message);
+    else if (cardsEl && cardsEl.dataset.qs !== qs) {
+      cardsEl.innerHTML = '<div class="empty">当前筛选的统计需联网加载，联网后将自动恢复</div>';
+    }
     return;
   }
   if (!summary) return;
@@ -350,6 +387,7 @@ export async function renderStats() {
       + (hasBudget
         ? card('总预算', homeMoney(budgetTotal)) + card('结余', homeMoney(remaining), remaining < 0 ? 'var(--danger)' : '')
         : card('总预算', '未设置') + card('结余', '—'));
+    if (cards) cards.dataset.qs = qs;
   }
 
   const catTot = summary.totalByCat || {};
@@ -1006,7 +1044,14 @@ async function saveForm() {
       }
       return;
     }
-    const rec = await api.post('/routes', obj);
+    let rec;
+    try {
+      rec = await api.post('/routes', obj);
+    } catch (e) {
+      /* 新建路线不在离线能力范围内（路线 id 由服务端生成）：给明确指引，而非让用户看到网络错误 */
+      if (isNetworkError(e)) throw new Error('离线状态暂不支持新增路线：请联网后再试（已有路线可离线记流水）');
+      throw e;
+    }
     toast('已新增路线，接下来可以逐笔记录花费');
     closeMask('formMask');
     await reloadAfterMutation();

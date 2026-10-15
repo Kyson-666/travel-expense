@@ -354,6 +354,40 @@ async function main() {
     await ev(`document.getElementById('offlineClose').click()`);
     await endOffline(winH);
     await send('Emulation.clearDeviceMetricsOverride');
+
+    /* ---------- I. onLine=true 但服务器不可达（真机典型：流量开着但 NAS 不可达） ---------- */
+    section('I. 服务器不可达但 onLine=true（不丢数据 + 无噪音提示）');
+    const winI = { from: Date.now(), to: Infinity };
+    offlineWindows.push(winI);
+    await send('Network.setBlockedURLs', { urls: ['*api/*'] });
+    await sleep(300);
+    await addExpenseViaUI(77, '门票', '可达性缺失项');
+    await sleep(700);
+    check('I1 服务器不可达时记一笔仍落队列（数据不丢）',
+      await waitFor(`document.querySelectorAll('.led.pending').length >= 1`, 8000));
+    const toastsAll = (await ev(`(window.__toastLog||[]).map(x=>x.m).join('|')`)) || '';
+    check('I2 全程无「统计加载失败」噪音提示', toastsAll.indexOf('统计加载失败') < 0, toastsAll.slice(-140));
+    await send('Network.setBlockedURLs', { urls: [] });
+    winI.to = Date.now();
+    await sleep(300);
+    await ev(`(()=>{const b=document.getElementById('offlineAction'); if(b) b.click();})()`);
+    await waitFor(`document.getElementById('offlinePanel').classList.contains('open')`, 5000);
+    await ev(`document.getElementById('offlineRetryAll').click()`);
+    check('I3 解除拦截后手动同步成功、待同步行清零',
+      await waitFor(`!document.querySelector('.led.pending')`, 20000));
+    /* 同步完成后服务端可见性有毫秒级延迟：轮询等待，避免时序竞态 */
+    let savedI = null;
+    for (let i = 0; i < 12 && !savedI; i++) {
+      savedI = ((await api('GET', `/api/routes/${routeId}/expenses?pageSize=500`, null, cookie)).json.data.list || [])
+        .find(ex => ex.title === '可达性缺失项');
+      if (!savedI) await sleep(400);
+    }
+    const dbgQ = await ev(`(async () => { const m = await import('/assets/offline.js'); const eng = m.getOfflineEngine();
+      const q = await eng.listQueue(); return { left: q.length, phase: eng._state.phase }; })()`);
+    check('I4 服务端已落库该笔（金额 77）', !!savedI && savedI.amount === 77,
+      { saved: !!savedI, amt: savedI && savedI.amount, dbg: dbgQ });
+    await ev(`document.getElementById('offlineClose').click()`);
+    await sleep(400);
   } finally {
     try { if (ws) ws.close(); } catch (e) { /* ignore */ }
     chrome.kill();
