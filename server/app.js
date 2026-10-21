@@ -44,15 +44,18 @@ function buildSecurityHeaders() {
      此处放宽同时覆盖「浏览器内配置远程服务器」的客户端场景。 */
   const connectSrc = config.ALLOWED_ORIGINS.length > 0
     ? "connect-src 'self' https:;"
-    : "connect-src 'self';";
+    : "connect-src 'self' https://*.amap.com https://apis.map.qq.com https://api.map.qq.com;";
   const h = {
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
-    /* CSP：script 仅同源（ES Modules 无内联脚本）；style 允许内联（大量 style 属性）；
+    /* CSP：script 仅同源 + 合规图商 SDK（足迹地图底图增强，管理员开启后动态加载，
+       默认关闭时这两域不产生任何请求）；style 允许内联（大量 style 属性）；
+       img 需 data:（marker 图标）blob:（AMap worker）与图商瓦片域；
+       worker-src blob: 为 AMap 2.0 矢量渲染 worker；
        frame-ancestors 'none' 等价 X-Frame-Options DENY
        分享页需要内联脚本（导出图片功能），分享页单独设置 CSP */
-    'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; ${connectSrc} frame-ancestors 'none'`
+    'Content-Security-Policy': `default-src 'self'; script-src 'self' https://webapi.amap.com https://*.amap.com https://map.qq.com https://*.qq.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.autonavi.com https://*.amap.com https://map.gtimg.com https://*.gtimg.com; worker-src 'self' blob:; ${connectSrc} frame-ancestors 'none'`
   };
   if (config.COOKIE_SECURE) {
     h['Strict-Transport-Security'] = `max-age=${config.HSTS_MAX_AGE}; includeSubDomains`;

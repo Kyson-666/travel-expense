@@ -251,19 +251,23 @@ function paintMapHost() {
     host.innerHTML = `<div id="fpSdkMap" style="height:430px;border-radius:10px;overflow:hidden;background:#e8eef0"></div>
       <div class="hint" style="margin-top:6px">底图由${cfg.provider === 'amap' ? '高德地图' : '腾讯地图'}提供（管理员已开启）；标记为示意点亮，不含行政边界。点击城市点查看详情。</div>`;
     renderSdkMap(document.getElementById('fpSdkMap'), cfg).catch(e => {
-      toast('底图加载失败，已降级为点阵示意：' + (e.message || e));
-      paintDotMap(host);
+      toast('底图加载失败，已降级为点阵示意');
+      paintDotMap(host, e.message || String(e));
     });
   } else if (cfg && cfg.enabled && fp.mapOpen) {
-    host.innerHTML = `<div class="empty">底图配置异常，已使用点阵示意</div>`;
-    paintDotMap(host);
+    paintDotMap(host, '底图配置异常');
   } else {
     paintDotMap(host);
   }
 }
 
-function paintDotMap(host) {
-  host.innerHTML = `<svg id="fpSvg" viewBox="0 0 680 470" role="img" aria-label="中国足迹点亮点阵地图（示意，不含边界线）"></svg>`;
+function paintDotMap(host, sdkErr) {
+  const warn = sdkErr
+    ? `<div class="banner" style="margin-bottom:8px">⚠ 底图未能加载（${esc(sdkErr)}），已降级为点阵示意。
+        常见原因：图商控制台未把本站域名加入该 Key 的域名白名单 / 服务器或浏览器无法访问图商。
+        可到 管理后台 → 地图配置 重新测试。</div>`
+    : '';
+  host.innerHTML = warn + `<svg id="fpSvg" viewBox="0 0 680 470" role="img" aria-label="中国足迹点亮点阵地图（示意，不含边界线）"></svg>`;
   drawMap();
   bindDotMapClicks();
 }
