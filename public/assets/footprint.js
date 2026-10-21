@@ -51,6 +51,7 @@ function render() {
         <div class="fp-title">我的足迹</div>
         <div class="fp-sub">点亮 ${s.cityCount} 座城市 · ${s.provinceCount} 个省级行政区${s.countryCount ? ' · ' + s.countryCount + ' 个国家/地区' : ''}</div>
       </div>
+      <button class="btn btn-line btn-sm" id="fpBack" title="返回路线列表">← 返回路线</button>
     </div>
     <div class="tabs" id="fpTabs">${tabs.map(([k, n]) =>
       `<div class="tab${fp.tab === k ? ' active' : ''}" data-tab="${k}">${n}</div>`).join('')}</div>
@@ -60,6 +61,8 @@ function render() {
   </div>`;
 
   view.querySelectorAll('#fpTabs .tab').forEach(t => t.onclick = () => { fp.tab = t.dataset.tab; render(); });
+  const backBtn = document.getElementById('fpBack');
+  if (backBtn) backBtn.onclick = () => navigate('/workbench');
   const body = document.getElementById('fpBody');
   if (fp.tab === 'map') renderMapTab(body);
   else if (fp.tab === 'ach') renderAchTab(body);

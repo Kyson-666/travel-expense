@@ -724,15 +724,10 @@ function openForm(id) {
   }
   document.getElementById('f_budget_total').value = r ? (r.budget_total || '') : '';
   document.getElementById('f_budget_daily').value = r ? (r.budget_daily || '') : '';
-  /* 目的地：标准地名多选（真源），f_dest 为只读镜像预览（AI 规划读取该镜像文本） */
+  /* 目的地：标准地名多选（真源），f_dest 为隐藏镜像（保存/AI 规划读取；展示由 chips 承担，
+   * 旧版自由文本路线编辑时原值保留，重新选择后即被覆盖） */
   const destBox = document.getElementById('f_dest');
   destBox.value = r ? (r.dest || '') : '';
-  destBox.readOnly = true;
-  destBox.style.background = '#f5f7f6';
-  destBox.style.cursor = 'not-allowed';
-  destBox.placeholder = '由所选标准地名自动生成';
-  const banner = document.getElementById('f_destBanner');
-  if (banner) banner.style.display = (r && !(r.places && r.places.length)) ? '' : 'none';
   const pickerBox = document.getElementById('f_destPicker');
   if (pickerBox) {
     pickerBox.innerHTML = '';

@@ -79,12 +79,9 @@
       <div class="field"><label>币种 <span class="hint">改后该路线流水币种同步更新</span></label><select id="f_currency"></select></div>
       <div class="field"><label>总预算 <span class="hint">本位币近似</span></label><input id="f_budget_total" placeholder="0" inputmode="decimal"></div>
       <div class="field"><label>日均预算</label><input id="f_budget_daily" placeholder="0" inputmode="decimal"></div>
-      <div class="field"><label>目的地 <span class="hint">标准地名多选：搜索汉字/拼音，最多 20 个，顺序即展示顺序</span></label>
+      <div class="field"><label>目的地 <span class="hint">最多选择 20 个地名</span></label>
         <div id="f_destPicker"></div>
-        <input id="f_dest" readonly placeholder="由所选标准地名自动生成" title="目的地由所选标准地名自动生成，无需手填">
-        <div id="f_destBanner" class="banner" style="display:none;margin:8px 0 0;font-size:13px">
-          目的地已升级为标准地名：该路线保存于旧版本，旧文本已清空，请重新搜索选择后点亮地图。
-        </div>
+        <input type="hidden" id="f_dest">
       </div>
     </div>
     <input type="hidden" id="f_daterange" value="">

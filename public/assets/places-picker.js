@@ -37,8 +37,7 @@ export function createPlacePicker(container, opts = {}) {
       <input class="pp-input" type="text" placeholder="${esc(opts.placeholder || '搜索地名（汉字 / 拼音 / 首字母）')}"
              autocomplete="off" inputmode="search" aria-label="搜索标准地名">
       <div class="pp-drop" style="display:none" role="listbox"></div>
-    </div>
-    ${single ? '' : `<div class="pp-hint">最多 ${max} 个；先选的排在前面（即目的地展示顺序）</div>`}`;
+    </div>`;
 
   const chipsEl = container.querySelector('.pp-chips');
   const input = container.querySelector('.pp-input');

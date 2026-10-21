@@ -136,9 +136,9 @@ async function main() {
     const chips = await page.$$eval('.pp-chip', els => els.map(e => e.textContent.replace(/[×◀▶]/g, '').trim()));
     check('chips 顺序为苏州、杭州', chips[0].includes('苏州') && chips[1].includes('杭州'), chips);
     const destPreview = await page.$eval('#f_dest', el => el.value);
-    check('dest 只读镜像 = 苏州 · 杭州', destPreview === '苏州 · 杭州', destPreview);
-    const destReadonly = await page.$eval('#f_dest', el => el.readOnly);
-    check('dest 为只读', destReadonly === true);
+    check('dest 隐藏镜像 = 苏州 · 杭州', destPreview === '苏州 · 杭州', destPreview);
+    const destHidden = await page.$eval('#f_dest', el => el.type);
+    check('dest 为隐藏输入（不再单独占一行）', destHidden === 'hidden', destHidden);
 
     /* ---------- C. 保存与地图点亮 ---------- */
     section('保存与地图点亮');
@@ -161,6 +161,13 @@ async function main() {
     check('页头统计含 2 座城市', /点亮 2 座城市/.test(stats), stats);
     const litList = await page.$eval('#fpLitList', el => el.textContent);
     check('点亮列表按省分组含苏州/杭州', litList.includes('苏州') && litList.includes('杭州'), litList);
+    /* 回归：足迹页须有「返回路线」按钮，点击回到路线工作台 */
+    await page.waitForSelector('#fpBack', { timeout: 5000 });
+    await page.click('#fpBack');
+    await page.waitForFunction(() => location.hash.startsWith('#/workbench'), { timeout: 6000 });
+    check('足迹页返回路线按钮可用', true);
+    await page.evaluate(() => { location.hash = '#/footprint'; });
+    await page.waitForSelector('#fpSvg', { timeout: 8000 });
 
     /* ---------- D. 页签切换 ---------- */
     section('子页签');

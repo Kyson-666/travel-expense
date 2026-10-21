@@ -465,5 +465,4 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 .pp-item-name{font-weight:600}
 .pp-item-meta{font-size:11.5px;color:var(--muted);margin-left:auto;flex:0 0 auto}
 .pp-empty{padding:14px;text-align:center;color:var(--muted);font-size:13px}
-.pp-hint{font-size:11.5px;color:var(--muted)}
 @media(max-width:560px){.pp-chip button{min-width:28px;min-height:28px}}
