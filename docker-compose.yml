@@ -13,9 +13,9 @@ services:
   travel-expense:
     # 安卓客户端（Capacitor）需要服务端开启跨域：v1.0.5 起支持 /api/public/server-check、
     # 账号归属校验（404 ACCOUNT_NOT_FOUND）、CORS 与跨域会话 Cookie。
-    image: ghcr.io/hanyuestar/travel-expense:v1.1.6
+    image: ghcr.io/hanyuestar/travel-expense:v1.2.0
     # 如访问 ghcr.io 较慢，可改用 Docker Hub 镜像（内容一致）：
-    #   image: kyson666/travel-expense:v1.1.6
+    #   image: kyson666/travel-expense:v1.2.0
     container_name: travel-expense
     restart: unless-stopped
     ports:
