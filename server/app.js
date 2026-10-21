@@ -110,6 +110,11 @@ function applyCors(req, res) {
  * 输出级别：5xx → ERROR，≥1s → WARN(slow)，其余 INFO —— 云日志平台可按级别过滤。 */
 function accessLog(req, res, startMs, statusCode) {
   if (!config.ACCESS_LOG) return;
+  /* 同一请求只记一次（API 分支用响应完成钩子记录，失败分支也调用本函数，去重避免重复行） */
+  if (res) {
+    if (res.__teLogged) return;
+    res.__teLogged = true;
+  }
   const dur = Date.now() - startMs;
   const ip = String(req.socket.remoteAddress || '-').replace(/^::ffff:/, '');
   let who = '-';
@@ -126,6 +131,19 @@ function accessLog(req, res, startMs, statusCode) {
   } else {
     console.log(`${ts} INFO  ${ip} user=${who} ${req.method} ${shortUrl} -> ${statusCode} (${dur}ms)`);
   }
+}
+
+/* API 统一访问日志：各 handler 自行 writeHead 并结束响应，这里用 writeHead 钩子捕获
+ * 最终状态码，在响应 finish/close 时统一记录。
+ * 背景（真机排查）：此前仅 4xx/404/500 分支调用 accessLog，**所有成功 API 请求无日志**，
+ * 导致「用户点了足迹页，日志里却没有任何 footprints 请求」的误判。 */
+function attachApiAccessLog(req, res, startMs) {
+  const origWriteHead = res.writeHead.bind(res);
+  let status = 200;
+  res.writeHead = function (code, ...args) { status = code; return origWriteHead(code, ...args); };
+  const done = () => accessLog(req, res, startMs, status);
+  res.on('finish', done);
+  res.on('close', done);
 }
 
 /* ---------- 前端错误上报（排查用）----------
@@ -345,6 +363,7 @@ const server = http.createServer(async (req, res) => {
 
   /* API 路由 */
   if (url.pathname.startsWith('/api/')) {
+    attachApiAccessLog(req, res, startMs);
     let body;
     try {
       body = await readBody(req);
