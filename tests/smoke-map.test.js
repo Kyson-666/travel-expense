@@ -136,6 +136,20 @@ async function main() {
     check('审计含 update_map_config', (r.json.data.list || []).length > 0, r.json.data && r.json.data.total);
     r = await req('GET', '/api/admin/audit-logs?action=test_map_config', null, admin);
     check('审计含 test_map_config', (r.json.data.list || []).length > 0, r.json.data && r.json.data.total);
+
+    section('前端错误上报（排查链路）');
+    r = await req('POST', '/api/log/client-error', { level: 'error', message: 'sdk-map-load-failed: test', stack: 'at test', context: { provider: 'amap', key_tail: 'abcd' } }, u1);
+    check('登录用户上报 200 logged=1', r.status === 200 && r.json.data.logged === 1, r.json.data);
+    r = await req('POST', '/api/log/client-error', { message: 'x'.repeat(4000) }, u1);
+    check('超长字段截断后仍 200', r.status === 200, r.status);
+    r = await req('POST', '/api/log/client-error', { message: 'anon' }, null);
+    check('未登录上报 → 401', r.status === 401, r.status);
+    let throttled = false;
+    for (let i = 0; i < 12; i++) {
+      r = await req('POST', '/api/log/client-error', { message: 'flood-' + i }, u1);
+      if (r.json && r.json.data && r.json.data.throttled) throttled = true;
+    }
+    check('限频生效（超 10 条/分钟静默）', throttled, throttled);
   } finally {
     await stop(srv);
     fs.rmSync(DATA_DIR, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });

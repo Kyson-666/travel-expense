@@ -91,6 +91,27 @@ async function request(method, path, body) {
  * 离线入队与降级判定的公共依据。offline.js 的退避判定在此基础上把 5xx 也视为可重试。 */
 export function isNetworkError(e) { return !!(e && e.network); }
 
+/* 前端错误上报 → 服务端日志（[client-error] 前缀，与访问日志同文件）。
+ * 用于排查 CSP 拦截、图商 SDK 加载失败、前端运行时异常等「浏览器侧」问题。
+ * 会话内最多 10 条（服务端另有每用户 10 条/分钟限频），字段截断。 */
+let _errBudget = 10;
+export function reportClientError(level, message, stack, context) {
+  if (_errBudget <= 0) return;
+  _errBudget--;
+  try {
+    fetch(getServerUrl() + '/api/log/client-error', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        level: level || 'error',
+        message: String(message == null ? '' : message).slice(0, 500),
+        stack: String(stack == null ? '' : stack).slice(0, 2000),
+        context: context || null
+      })
+    }).catch(() => { /* 上报失败静默，绝不影响主流程 */ });
+  } catch (e) { /* ignore */ }
+}
+
 export const api = {
   get: (p) => request('GET', p),
   post: (p, b) => request('POST', p, b),

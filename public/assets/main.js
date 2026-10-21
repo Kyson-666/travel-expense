@@ -1,5 +1,5 @@
 /* main.js — 入口：hash 路由 + 守卫 + 全局事件（ES Module） */
-import { store, toast, api, navigate, fetchMe, applyAuth, renderHeader, getServerUrl, setServerUrl, HAS_BUILTIN_SERVER, esc } from './api.js';
+import { store, toast, api, navigate, fetchMe, applyAuth, renderHeader, getServerUrl, setServerUrl, HAS_BUILTIN_SERVER, esc, reportClientError } from './api.js';
 import { initAuth, renderLogin, renderRegister } from './auth.js';
 import { loadRoutes, loadYears, renderWorkbench, renderStats, renderProfile, bindFormEvents, closeAllMasks } from './app.js';
 import { renderAdmin, bindAdminEvents } from './admin.js';
@@ -154,5 +154,17 @@ function bindHeaderEvents() {
     if (!e.target.closest('.menu')) document.getElementById('userMenu').classList.remove('open');
   });
 }
+
+/* 全局前端错误上报（写入服务端日志，便于排查浏览器侧问题：
+ * CSP 拦截外部 SDK、图商底图加载失败、前端运行时异常等） */
+window.addEventListener('error', (e) => {
+  reportClientError('error', e.message || 'window.onerror', e.error && e.error.stack,
+    { src: e.filename || '', line: e.lineno || 0, col: e.colno || 0 });
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason || {};
+  reportClientError('error', 'unhandledrejection: ' + (r.message || String(r)),
+    r.stack, { kind: 'unhandledrejection' });
+});
 
 init();

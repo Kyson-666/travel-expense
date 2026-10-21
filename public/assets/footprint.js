@@ -3,7 +3,7 @@
  * 地图为手写 SVG 点阵：不绘制任何行政边界线，仅按官方经纬度放点（合规风险最低）；
  * 含台湾省、香港、澳门与南海诸岛附图（右下角）与钓鱼岛示意点。
  * 移动端：成就卡 + 点亮列表优先，地图默认收起为可展开卡片；点省弹底部抽屉。 */
-import { store, toast, api, navigate, esc } from './api.js';
+import { store, toast, api, navigate, esc, reportClientError } from './api.js';
 import { createPlacePicker } from './places-picker.js';
 import { openRouteEditor } from './app.js';
 
@@ -251,6 +251,13 @@ function paintMapHost() {
     host.innerHTML = `<div id="fpSdkMap" style="height:430px;border-radius:10px;overflow:hidden;background:#e8eef0"></div>
       <div class="hint" style="margin-top:6px">底图由${cfg.provider === 'amap' ? '高德地图' : '腾讯地图'}提供（管理员已开启）；标记为示意点亮，不含行政边界。点击城市点查看详情。</div>`;
     renderSdkMap(document.getElementById('fpSdkMap'), cfg).catch(e => {
+      /* 关键降级上报服务端日志（含 provider / key 尾号 / 安全码是否配置，便于远程排查） */
+      reportClientError('error', 'sdk-map-load-failed: ' + (e && e.message ? e.message : e), e && e.stack, {
+        provider: cfg.provider,
+        key_tail: String(cfg.amap_key || cfg.tencent_key || '').slice(-4),
+        security_set: !!cfg.amap_security,
+        page: location.href.split('#')[0]
+      });
       toast('底图加载失败，已降级为点阵示意');
       paintDotMap(host, e.message || String(e));
     });

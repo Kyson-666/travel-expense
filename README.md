@@ -96,8 +96,10 @@
 ## 📌 版本变更记录
 
 ### v1.2.2（2026-10-21）
-**足迹底图 CSP 放行修复（真机反馈）**：
+**底图 CNS/缓存修复 + 全量日志补强（真机反馈）**：
 - 修复：主应用 CSP `script-src 'self'` 拦截高德/腾讯外部 SDK，导致底图增强开启后**静默降级点阵**（测试连通性通过但地图不加载）。现放行 `webapi.amap.com / *.amap.com / map.qq.com / *.qq.com`（script）、`*.autonavi.com / *.amap.com / map.gtimg.com / *.gtimg.com`（img 瓦片）与对应 connect-src，新增 `worker-src blob:`（AMap 2.0 矢量渲染 worker）。CSP 域名为固定的两大合规图商，默认关闭底图增强时这些域不产生任何请求。
+- 修复（关键）：**Service Worker 缓存策略** —— 原 `cache-first` + 固定 `VERSION` 会让设备在升级服务端后仍返回旧版 JS/CSS（前端更新不生效）。现改为**资源网络优先、断网回退缓存**（保留离线能力），`VERSION` 与版本号绑定并在 CI 校验一致性（漏改直接 fail）。
+- **全量日志补强**（排查用）：① 访问日志加 **ISO 时间戳 / 访问者用户名 / 慢请求 WARN（≥1s）/ 5xx ERROR 分级**；② 启动日志打印**版本号**（一眼确认镜像版本）；③ 新增 `POST /api/log/client-error` 前端错误上报（`window.onerror` / `unhandledrejection` / 地图 SDK 加载失败自动上报，含 provider 与 key 尾号），与服务端日志同文件（`[client-error]` 前缀），登录用户限每用户 10 条/分钟。
 - 降级提示改进：底图加载失败不再只是一闪而过的 toast，改为地图区**常驻提示条**（含原因与排查入口）。
 
 ### v1.2.1（2026-10-21）

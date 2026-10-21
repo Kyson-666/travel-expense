@@ -27,9 +27,17 @@ jobs:
       - name: Syntax check (server)
         working-directory: server
         run: |
-          for f in app.js auth.js admin_api.js routes_api.js db.js config.js http.js mailer.js fx.js csv.js ai_service.js; do
+          for f in app.js auth.js admin_api.js routes_api.js db.js config.js http.js mailer.js fx.js csv.js ai_service.js map_service.js; do
             node --check "$f" || exit 1
           done
+
+      - name: Verify SW cache version == app version
+        run: |
+          V=$(node -p "require('./server/package.json').version")
+          grep -q "travel-expense-shell-v$V" public/sw.js || {
+            echo "❌ public/sw.js 的 VERSION 未同步到 v$V —— 发版必须同步，否则设备 SW 不重新 install，前端停留在旧版";
+            exit 1;
+          }
 
       - name: Syntax check (frontend ES modules)
         working-directory: public

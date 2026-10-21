@@ -1,5 +1,7 @@
 'use strict';
-const VERSION = 'travel-expense-shell-v2';
+/* ⚠ 发版必改：VERSION 必须与 server/package.json 的 version 完全一致（CI 有校验）。
+ * 只改资源不改 VERSION 会导致设备上的 SW 不重新 install → 继续返回旧版 JS/CSS。 */
+const VERSION = 'travel-expense-shell-v1.2.2';
 const CACHE = `${VERSION}-static`;
 const SHELL = [
   '/',
@@ -65,14 +67,19 @@ self.addEventListener('fetch', event => {
   }
 
   if (url.pathname.startsWith('/assets/') || url.pathname === '/styles.css' || url.pathname.startsWith('/icons/')) {
+    /* 网络优先 + 缓存兜底：保证服务升级后刷新即拿到新前端（此前 cache-first 会让设备
+     * 永远停留在首次 install 的旧 JS —— 即使服务端已升级）。断网时回退缓存，保留离线能力。 */
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
-      const cached = await cache.match(request);
-      const network = fetch(request).then(response => {
+      try {
+        const response = await fetch(request);
         if (response && response.ok) cache.put(request, response.clone());
         return response;
-      }).catch(() => null);
-      return cached || await network || new Response('', { status: 504 });
+      } catch (e) {
+        const cached = await cache.match(request);
+        if (cached) return cached;
+        return new Response('', { status: 504 });
+      }
     })());
   }
 });

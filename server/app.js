@@ -89,12 +89,52 @@ function applyCors(req, res) {
   return false;
 }
 
-/* ---------- 访问日志 ---------- */
+/* ---------- 访问日志 ----------
+ * 排查用全量日志：ISO 时间戳 + 访问者（API 请求解析登录用户）+ 慢请求/服务端错误分级。
+ * 静态资源不解析会话（避免每个 js/css 一次 session 查询），仅 /api/ 请求附带用户名。
+ * 输出级别：5xx → ERROR，≥1s → WARN(slow)，其余 INFO —— 云日志平台可按级别过滤。 */
 function accessLog(req, res, startMs, statusCode) {
   if (!config.ACCESS_LOG) return;
   const dur = Date.now() - startMs;
-  const ip = req.socket.remoteAddress || '-';
-  console.log(`${ip} - ${req.method} ${req.url} -> ${statusCode} (${dur}ms)`);
+  const ip = String(req.socket.remoteAddress || '-').replace(/^::ffff:/, '');
+  let who = '-';
+  if (String(req.url || '').startsWith('/api/')) {
+    try { const u = auth.authFromReq(req); if (u) who = u.username ? String(u.username) : ('#' + u.id); } catch (e) { /* 解析失败不阻塞日志 */ }
+  }
+  const url = String(req.url || '');
+  const shortUrl = url.length > 180 ? url.slice(0, 180) + '…' : url;
+  const ts = new Date().toISOString();
+  if (statusCode >= 500) {
+    console.warn(`${ts} ERROR ${ip} user=${who} ${req.method} ${shortUrl} -> ${statusCode} (${dur}ms)`);
+  } else if (dur >= 1000) {
+    console.warn(`${ts} WARN  ${ip} user=${who} ${req.method} ${shortUrl} -> ${statusCode} (${dur}ms, slow)`);
+  } else {
+    console.log(`${ts} INFO  ${ip} user=${who} ${req.method} ${shortUrl} -> ${statusCode} (${dur}ms)`);
+  }
+}
+
+/* ---------- 前端错误上报（排查用）----------
+ * 前端 window.onerror / unhandledrejection / 关键降级（如地图 SDK 加载失败）上报到此，
+ * 与服务端日志同文件输出（[client-error] 前缀），便于一次排查拿到完整链路。
+ * 限制：需登录；字段截断；每用户每分钟最多 10 条（超出静默丢弃）。 */
+const _clientErrBucket = new Map();
+function clientErrorLog(req, res, body, startMs) {
+  const u = auth.authFromReq(req);
+  if (!u) { accessLog(req, res, startMs, 401); return fail(res, 401, '请先登录', { code: 'UNAUTHORIZED' }); }
+  const now = Date.now();
+  const bucket = _clientErrBucket.get(u.id) || { t: 0, n: 0 };
+  if (now - bucket.t > 60000) { bucket.t = now; bucket.n = 0; }
+  bucket.n++;
+  _clientErrBucket.set(u.id, bucket);
+  if (bucket.n > 10) { accessLog(req, res, startMs, 200); return send(res, 200, { ok: true, data: { throttled: true } }); }
+  const cut = (v, n) => String(v == null ? '' : v).replace(/\s+/g, ' ').slice(0, n);
+  const level = ['error', 'warn', 'info'].includes(body && body.level) ? body.level : 'error';
+  const msg = cut(body && body.message, 500);
+  const stack = cut(body && body.stack, 2000);
+  const ctx = cut(body && (typeof body.context === 'object' ? JSON.stringify(body.context) : body.context), 1000);
+  console.warn(`[client-error] ${new Date().toISOString()} user=${u.username || u.id} level=${level} msg=${msg}${ctx ? ' ctx=' + ctx : ''}${stack ? ' | stack=' + stack : ''}`);
+  accessLog(req, res, startMs, 200);
+  return send(res, 200, { ok: true, data: { logged: 1 } });
 }
 
 /* 同源校验：写操作需 Origin/Referer 与 Host 同域；无来源头放行（curl/服务端调用）
@@ -133,6 +173,8 @@ function passwordResetBlocked(req, url) {
   if (url.pathname.startsWith('/api/auth/')) return false;
   if (url.pathname.startsWith('/api/public/')) return false;
   if (url.pathname.startsWith('/api/app/')) return false;
+  /* 前端错误上报在改密页也可能发生，豁免（仅写日志，无业务数据） */
+  if (url.pathname === '/api/log/client-error') return false;
   const u = auth.authFromReq(req);
   return !!(u && u.force_reset);
 }
@@ -296,6 +338,10 @@ const server = http.createServer(async (req, res) => {
       return fail(res, 400, '请求体解析失败');
     }
     try {
+      /* 前端错误上报（与访问日志同文件，排查地图 SDK / CSP / 前端异常） */
+      if (url.pathname === '/api/log/client-error' && req.method === 'POST') {
+        return clientErrorLog(req, res, body, startMs);
+      }
       if (url.pathname.startsWith('/api/auth/')) {
         return await auth.handle(req, res, url, body);
       }
@@ -346,7 +392,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(config.PORT, () => {
-  console.log(`[travel-expense] 多用户后端启动 :${config.PORT}，DB=${path.join(config.DATA_DIR, config.DB_FILE)}`);
+  console.log(`[travel-expense] 多用户后端启动 :${config.PORT}，版本 v${require('./package.json').version}，DB=${path.join(config.DATA_DIR, config.DB_FILE)}`);
 });
 
 /* ---------- 优雅关闭：SIGTERM/SIGINT → 关闭空闲连接 → 停止接受新连接 → 关闭 DB → 退出 ---------- */
