@@ -95,6 +95,12 @@
 
 ## 📌 版本变更记录
 
+### v1.2.3（2026-10-21）
+**高德底图渲染修复（真机 + 真实 Key 端到端验证）**：
+- 修复：CSP 缺 `'unsafe-eval'` 导致 AMap 2.0 模块加载器报 `EvalError` → `U.Module.WebGLRender is not a constructor` → 地图引擎初始化失败（表现为底图区域空白/降级）。现仅当管理员开启底图增强时，CSP 动态放行 `'unsafe-eval'` 与图商 script/img 域并附加 `http://webapi.amap.com`（SDK 预载默认图标），默认关闭保持严格策略；移除 10s 配置缓存（保存后刷新立即生效）。
+- 渲染改进：SDK 模式下点亮标记改用 `CircleMarker`（高德）/ `MultiCircle`（腾讯）圆点渲染，不再依赖 marker 图标与默认样式；省名不再叠加标注（真实底图自带行政区名，仅点阵模式自绘）。
+- 验证：以上海德真实 Key 完成端到端 E2E（保存配置 → 足迹页 → 底图 canvas 渲染成功 + 点亮标记正确），截图见交付说明。
+
 ### v1.2.2（2026-10-21）
 **底图 CNS/缓存修复 + 全量日志补强（真机反馈）**：
 - 修复：主应用 CSP `script-src 'self'` 拦截高德/腾讯外部 SDK，导致底图增强开启后**静默降级点阵**（测试连通性通过但地图不加载）。现放行 `webapi.amap.com / *.amap.com / map.qq.com / *.qq.com`（script）、`*.autonavi.com / *.amap.com / map.gtimg.com / *.gtimg.com`（img 瓦片）与对应 connect-src，新增 `worker-src blob:`（AMap 2.0 矢量渲染 worker）。CSP 域名为固定的两大合规图商，默认关闭底图增强时这些域不产生任何请求。

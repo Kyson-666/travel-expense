@@ -1,7 +1,7 @@
 'use strict';
 /* ⚠ 发版必改：VERSION 必须与 server/package.json 的 version 完全一致（CI 有校验）。
  * 只改资源不改 VERSION 会导致设备上的 SW 不重新 install → 继续返回旧版 JS/CSS。 */
-const VERSION = 'travel-expense-shell-v1.2.2';
+const VERSION = 'travel-expense-shell-v1.2.3';
 const CACHE = `${VERSION}-static`;
 const SHELL = [
   '/',

@@ -310,60 +310,40 @@ async function renderSdkMap(host, cfg) {
   const m = fp.map;
   const litPts = m.points.filter(p => p.lit && yearFiltered(p) && p.level === 'city');
   const litProvs = m.points.filter(p => p.lit && yearFiltered(p) && p.level === 'province');
-  const provLabel = (p) => MUNI.has(p.name) ? '' : (p.name || '');
-  const dotIcon = (color) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.5" fill="${color}" stroke="#fff" stroke-width="1.6"/></svg>`);
 
   if (cfg.provider === 'amap') {
     const AMap = window.AMap;
     const map = new AMap.Map(host, { zoom: 4, center: [104.8, 36.6], viewMode: '2D', mapStyle: 'amap://styles/whitesmoke', zooms: [3.5, 12] });
     fp.sdkMap = map;
+    /* 用 CircleMarker（圆点）而非 Marker：无图标依赖、不受默认 pin 影响，样式更统一 */
     litPts.forEach(p => {
-      const mk = new AMap.Marker({ position: [p.lng, p.lat], anchor: 'center',
-        content: `<img src="${dotIcon('#15a98c')}" style="width:18px;height:18px" alt="">`, title: p.name });
-      mk.on('click', () => openProvSheet(p.province || p.name));
-      map.add(mk);
+      const c = new AMap.CircleMarker({ center: [p.lng, p.lat], radius: 5,
+        fillColor: '#15a98c', fillOpacity: 0.95, strokeColor: '#ffffff', strokeWeight: 1.5, zIndex: 120, cursor: 'pointer', bubble: true });
+      c.on('click', () => openProvSheet(p.province || p.name));
+      map.add(c);
     });
     litProvs.forEach(p => {
-      const mk = new AMap.Marker({ position: [p.lng, p.lat], anchor: 'center',
-        content: `<img src="${dotIcon('#0f6e56')}" style="width:24px;height:24px" alt="">`, title: p.name });
-      mk.on('click', () => openProvSheet(p.name));
-      map.add(mk);
+      const c = new AMap.CircleMarker({ center: [p.lng, p.lat], radius: 8,
+        fillColor: '#0f6e56', fillOpacity: 0.95, strokeColor: '#ffffff', strokeWeight: 1.5, zIndex: 130, cursor: 'pointer', bubble: true });
+      c.on('click', () => openProvSheet(p.name));
+      map.add(c);
     });
-    m.points.filter(x => x.level === 'province').forEach(p => {
-      const lit = yearFiltered(p);
-      const label = new AMap.Text({ text: provLabel(p), anchor: 'center', position: [p.lng, p.lat],
-        style: { 'font-size': '11px', 'color': lit ? '#0f6e56' : '#8aa39b', 'background': 'transparent', 'border': 'none', 'text-shadow': '0 0 3px #fff,0 0 3px #fff' } });
-      map.add(label);
-    });
+    /* 省名不额外标注：真实底图自带行政区名（仅点阵模式需要自绘省名） */
   } else {
     const TMap = window.TMap;
     const map = new TMap.Map(host, { zoom: 4, center: new TMap.LatLng(36.6, 104.8), baseMap: { type: 'vector' } });
     fp.sdkMap = map;
-    const mkGeoms = litPts.map(p => ({ id: 'c' + p.id, position: new TMap.LatLng(p.lat, p.lng),
-      content: p.name, styleId: 'cityLit', properties: { prov: p.province || p.name } }));
-    litProvs.forEach(p => mkGeoms.push({ id: 'p' + p.id, position: new TMap.LatLng(p.lat, p.lng),
-      content: p.name, styleId: 'provLit', properties: { prov: p.name } }));
-    const styles = {
-      cityLit: new TMap.MarkerStyle({ width: 18, height: 18, anchor: { x: 9, y: 9 }, color: '#0f6e56',
-        src: dotIcon('#15a98c') }),
-      provLit: new TMap.MarkerStyle({ width: 24, height: 24, anchor: { x: 12, y: 12 }, color: '#0f6e56',
-        src: dotIcon('#0f6e56') })
-    };
-    const markers = new TMap.MultiMarker({ map, styles, geometries: mkGeoms });
-    markers.on('click', (evt) => {
+    const circles = [];
+    litPts.forEach(p => circles.push({ id: 'c' + p.id, styleId: 'cityLit', center: new TMap.LatLng(p.lat, p.lng), radius: 5, properties: { prov: p.province || p.name } }));
+    litProvs.forEach(p => circles.push({ id: 'p' + p.id, styleId: 'provLit', center: new TMap.LatLng(p.lat, p.lng), radius: 8, properties: { prov: p.name } }));
+    const multiCircle = new TMap.MultiCircle({ map, styles: {
+      cityLit: new TMap.CircleStyle({ color: 'rgba(21,169,140,0.95)', showBorder: true, borderColor: '#ffffff', borderWidth: 1.5 }),
+      provLit: new TMap.CircleStyle({ color: 'rgba(15,110,86,0.95)', showBorder: true, borderColor: '#ffffff', borderWidth: 1.5 })
+    }, geometries: circles });
+    multiCircle.on('click', (evt) => {
       const prop = evt.geometry && evt.geometry.properties;
       if (prop && prop.prov) openProvSheet(prop.prov);
     });
-    const labelGeoms = m.points.filter(x => x.level === 'province').map(p => ({
-      id: 'l' + p.id, position: new TMap.LatLng(p.lat, p.lng), content: provLabel(p),
-      styleId: yearFiltered(p) ? 'lit' : 'off'
-    }));
-    const labels = new TMap.MultiLabel({ map, styles: {
-      lit: new TMap.LabelStyle({ color: '#0f6e56', size: 12, angle: 0, alignment: 'center', verticalAlignment: 'middle' }),
-      off: new TMap.LabelStyle({ color: '#8aa39b', size: 12, angle: 0, alignment: 'center', verticalAlignment: 'middle' })
-    }, geometries: labelGeoms });
-    if (labelGeoms.length) labels.setMap(map);
   }
 }
 

@@ -45,22 +45,37 @@ function buildSecurityHeaders() {
   const connectSrc = config.ALLOWED_ORIGINS.length > 0
     ? "connect-src 'self' https:;"
     : "connect-src 'self' https://*.amap.com https://apis.map.qq.com https://api.map.qq.com;";
+  /* 底图增强开启时（管理员配置了图商）才放行 SDK 所需：
+   * - script-src 需 'unsafe-eval'：高德 JS API 2.0 的模块加载器以 eval 执行动态模块
+   *   （缺失时报 `U.Module.WebGLRender is not a constructor`，地图引擎初始化直接失败）；
+   * - img-src 需 http://webapi.amap.com：SDK 预载默认 marker 图标写死 http（自定义 marker 用 data: 不受影响）。
+   * 默认关闭时不放行任何图商域，保持原有严格策略。查询结果缓存 10s，配置变更后刷新页面即生效。 */
+  const mapEnabled = mapProviderCached() !== 'none';
+  const scriptSrc = "'self'" + (mapEnabled
+    ? " 'unsafe-eval' https://webapi.amap.com https://*.amap.com https://map.qq.com https://*.qq.com" : '');
+  const imgSrc = "'self' data: blob:" + (mapEnabled
+    ? " http://webapi.amap.com https://*.autonavi.com https://*.amap.com https://map.gtimg.com https://*.gtimg.com"
+    : ' https://*.autonavi.com https://*.amap.com https://map.gtimg.com https://*.gtimg.com');
   const h = {
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
-    /* CSP：script 仅同源 + 合规图商 SDK（足迹地图底图增强，管理员开启后动态加载，
-       默认关闭时这两域不产生任何请求）；style 允许内联（大量 style 属性）；
-       img 需 data:（marker 图标）blob:（AMap worker）与图商瓦片域；
+    /* CSP：script 仅同源（默认）+ 图商 SDK（仅底图增强开启时）；style 允许内联；
        worker-src blob: 为 AMap 2.0 矢量渲染 worker；
        frame-ancestors 'none' 等价 X-Frame-Options DENY
        分享页需要内联脚本（导出图片功能），分享页单独设置 CSP */
-    'Content-Security-Policy': `default-src 'self'; script-src 'self' https://webapi.amap.com https://*.amap.com https://map.qq.com https://*.qq.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.autonavi.com https://*.amap.com https://map.gtimg.com https://*.gtimg.com; worker-src 'self' blob:; ${connectSrc} frame-ancestors 'none'`
+    'Content-Security-Policy': `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src ${imgSrc}; worker-src 'self' blob:; ${connectSrc} frame-ancestors 'none'`
   };
   if (config.COOKIE_SECURE) {
     h['Strict-Transport-Security'] = `max-age=${config.HSTS_MAX_AGE}; includeSubDomains`;
   }
   return h;
+}
+
+/* 图商配置查询：CSP 头按请求构建，直接读主键行（better-sqlite3 微秒级，无需缓存）。
+ * 不做进程内缓存 —— 曾用 10s 缓存，导致「保存配置后立刻刷新」仍拿到旧 CSP（首屏 AMap 被拦）。 */
+function mapProviderCached() {
+  try { return dbModule.getMapConfig().provider || 'none'; } catch (e) { return 'none'; }
 }
 function applySecurityHeaders(res) {
   const h = buildSecurityHeaders();
