@@ -68,6 +68,18 @@
 | ![离线记账：待同步行与离线状态条](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/08-offline-pending.png) | ![同步队列：冲突二选一 · 导出留档 · 清理缓存](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/09-offline-queue-conflict.png) |
 | 断网也能记一笔：新行以**虚线边框 + 「待同步」胶囊**标记，顶部状态条显示待同步笔数；恢复网络后自动批量、幂等同步 | 同一笔在别处被修改时，队列面板给出**保留本地 / 采用服务端**二选一（可先「导出队列」留档）；面板同时显示**存储用量**并提供**清理缓存**（只清缓存、不动待同步数据） |
 
+### 家庭协作 · 年度旅行报告 · 足迹地图增强（v1.3.0）
+
+| 家庭协作 · 邀请成员记账 | 足迹点阵地图（省名标注 + 图例） |
+|---|---|
+| ![家庭协作：邀请成员记账](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@main/screenshots/10-collab-manage.png) | ![足迹点阵地图：省名标注与图例](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@main/screenshots/11-footprint-map.png) |
+| 路线详情 →「邀请成员记账」：按用户名 / 邮箱搜索站内用户，一键邀请（上限 8 人）；成员可共同记流水 / 管同行人 / 查结算，不可改路线本体；移除成员其已记流水保留，操作人进审计日志 | 点亮省/市一目了然：**省名随点亮高亮**、左上角图例、点亮标记含首亮省份大标；含台湾省、港澳、南海诸岛附图与钓鱼岛示意点（不绘行政边界线）；管理后台开启底图增强后自动切换高德 / 腾讯真实底图（失败自动降级本图） |
+
+| 年度旅行报告 | 足迹地图底图配置 |
+|---|---|
+| ![年度旅行报告](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@main/screenshots/12-footprint-recap.png) | ![管理后台：足迹地图配置](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@main/screenshots/13-map-config.png) |
+| 足迹页新增「年报」页签：点亮（累计 + 年度新增）× 花费（本位币）× 行程（天数 / 最贵一笔 / 最长旅程 / 预算完成率）× 成就徽章一页流；**一键生成 1080 宽手机比例分享长图** | 管理后台 →「地图配置」：默认关闭（合规最稳的自绘点阵）；可选接入高德 / 腾讯真实底图，Key 脱敏存储 + **一键测试连通性**（服务端直连厂商校验）；底图展示不消耗 Key 的 REST 调用配额 |
+
 ---
 
 ## 🎮 在线演示
