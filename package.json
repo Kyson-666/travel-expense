@@ -1,6 +1,6 @@
 {
   "name": "travel-expense-workbench",
-  "version": "1.0.4",
+  "version": "1.2.0",
   "description": "旅行路线 · 经费台 — 多用户自托管工作台（全栈单镜像，数据存于挂载卷 app.db）",
   "author": "hanyuestar <hanyueppy@foxmail.com>",
   "license": "SEE LICENSE IN LICENSE",

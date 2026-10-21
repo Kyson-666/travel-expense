@@ -56,6 +56,8 @@ async function main() {
   try {
     const r = await req('POST', '/api/auth/login', { login: 'admin', password: '123456' });
     const admin = r.setCookie;
+    /* 首登强制改密已在服务端强制：先改为测试密码，后续业务请求才不被 403 */
+    await req('POST', '/api/auth/password', { oldPassword: '123456', newPassword: 'adminnew123' }, admin);
 
     section('分享页导出图片');
     const cr = await req('POST', '/api/routes', {

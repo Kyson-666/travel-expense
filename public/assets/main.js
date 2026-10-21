@@ -1,8 +1,9 @@
 /* main.js — 入口：hash 路由 + 守卫 + 全局事件（ES Module） */
 import { store, toast, api, navigate, fetchMe, applyAuth, renderHeader, getServerUrl, setServerUrl, HAS_BUILTIN_SERVER, esc } from './api.js';
 import { initAuth, renderLogin, renderRegister } from './auth.js';
-import { loadRoutes, loadYears, renderWorkbench, renderStats, renderProfile, bindFormEvents } from './app.js';
+import { loadRoutes, loadYears, renderWorkbench, renderStats, renderProfile, bindFormEvents, closeAllMasks } from './app.js';
 import { renderAdmin, bindAdminEvents } from './admin.js';
+import { renderFootprint } from './footprint.js';
 import { initOffline } from './offline.js';
 import { mountOfflineUI, mountInstallGuide } from './offline-ui.js';
 
@@ -42,6 +43,9 @@ async function guard() {
     return true;
   }
   if (!u) { navigate('/login'); return false; }
+  /* 初始密码未修改：服务端会拒绝除 /api/auth/*、/api/public/*、/api/app/* 外的全部请求，
+   * 前端统一引导到改密页，避免工作台先发请求再弹 403。 */
+  if (u.force_reset && !route.startsWith('#/profile')) { navigate('/profile?reset=1'); return false; }
   if (route.startsWith('#/admin') && u.role !== 'admin') { toast('无权限'); navigate('/workbench'); return false; }
   return true;
 }
@@ -80,6 +84,7 @@ async function render() {
   const route = location.hash || '#/workbench';
   /* 未配置服务器时，强制进入连接页（仅服务器设置页除外） */
   if (!getServerUrl() && !route.startsWith('#/setup')) { navigate('/setup'); return; }
+  closeAllMasks();   // 路由切换先关浮层，避免遮罩盖在新页上拦截点击
   renderHeader();   // 同步顶部用户区（已登录显示菜单，未登录隐藏）
 
   if (route.startsWith('#/setup')) { renderSetup(); return; }
@@ -87,6 +92,8 @@ async function render() {
   if (route.startsWith('#/register')) { renderRegister(); return; }
   if (route.startsWith('#/profile')) { renderProfile(); return; }
   if (route.startsWith('#/admin')) { renderAdmin(); return; }
+  /* 足迹点亮：一级模块（地图 / 成就 / 回顾 / 管理） */
+  if (route.startsWith('#/footprint')) { renderFootprint(); return; }
 
   /* 默认工作台：年份胶囊依赖全量年份接口，与列表并行拉取 */
   await Promise.all([loadRoutes(), loadYears()]);
@@ -141,6 +148,8 @@ function bindHeaderEvents() {
     }
   }
   document.getElementById('homeLink').onclick = () => navigate('/workbench');
+  const fpBtn = document.getElementById('footprintLink');
+  if (fpBtn) fpBtn.onclick = () => navigate('/footprint');
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.menu')) document.getElementById('userMenu').classList.remove('open');
   });

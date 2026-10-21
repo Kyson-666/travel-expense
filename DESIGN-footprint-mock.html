@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>足迹点亮 · 交互演示（评审稿）</title>
+<style>
+  :root{
+    --primary:#15a98c; --primary-weak:#e5f5f0; --primary-dark:#0e8a72;
+    --bg:#f2f7f5; --card:#ffffff; --line:#dcebe6; --text:#1f2d2b; --muted:#6b7d79;
+    --dot-off:#c5d3cf; --gold:#d9a441; --danger:#d64545;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;font-size:14px}
+  button{font-family:inherit}
+
+  /* ── 演示工具条 ── */
+  .toolbar{position:sticky;top:0;z-index:50;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;
+    padding:10px 16px;background:#123f36;color:#fff}
+  .tb-title{font-weight:600}
+  .demo-tag{background:#ffd76a;color:#5a4300;border-radius:6px;padding:1px 7px;font-size:11px;margin-left:6px;font-weight:600}
+  .tb-actions{display:flex;gap:10px;flex-wrap:wrap}
+  .seg{display:inline-flex;background:rgba(255,255,255,.14);border-radius:9px;padding:3px}
+  .seg button{border:none;background:transparent;color:#dfeeea;padding:5px 12px;border-radius:7px;font-size:13px;cursor:pointer}
+  .seg button.active{background:#fff;color:#123f36;font-weight:600}
+
+  /* ── 设备容器 ── */
+  .stage{padding:18px 12px 60px;display:flex;justify-content:center}
+  .device{width:100%;max-width:1060px;transition:max-width .3s}
+  .device.mobile{max-width:390px;background:#eef4f2;border-radius:28px;box-shadow:0 18px 50px rgba(18,63,54,.25);padding:10px;border:8px solid #123f36}
+
+  /* ── 应用页头 ── */
+  .app-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin:6px 2px 14px}
+  .h-title{font-size:19px;font-weight:700}
+  .h-sub{color:var(--muted);font-size:12px;margin-top:2px}
+  .year-seg{display:inline-flex;background:#e3eeea;border-radius:9px;padding:3px;flex-wrap:wrap}
+  .year-seg button{border:none;background:transparent;color:var(--muted);padding:5px 11px;border-radius:7px;font-size:13px;cursor:pointer}
+  .year-seg button.active{background:var(--primary);color:#fff;font-weight:600}
+
+  /* ── 统计卡 ── */
+  .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;text-align:center}
+  .stat b{display:block;font-size:22px;color:var(--primary)}
+  .stat span{color:var(--muted);font-size:12px}
+  @media(max-width:560px){.stats-row{grid-template-columns:repeat(2,1fr)}}
+  /* 手机框架模式下按容器宽度切栅格（不依赖视口媒体查询） */
+  .device.mobile .stats-row{grid-template-columns:repeat(2,1fr)}
+  .device.mobile .ach-grid{grid-template-columns:repeat(2,1fr)}
+
+  /* ── 卡片 ── */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+  .card h3{margin:0 0 10px;font-size:15px}
+  .card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .card-head h3{margin:0}
+  .seg.small button{padding:4px 10px;font-size:12px;color:var(--muted)}
+  .seg.small{background:#e9f2ef}
+  .seg.small button.active{background:var(--primary);color:#fff}
+
+  /* ── 地图 ── */
+  .map-wrap{background:linear-gradient(180deg,#fbfefd,#eef6f3);border:1px solid var(--line);border-radius:12px;padding:4px}
+  svg{display:block;width:100%;height:auto}
+  .dot-hit{cursor:pointer}
+  .dot-hit.off{cursor:default}
+  .map-foot{color:var(--muted);font-size:11px;line-height:1.7;margin-top:10px}
+  .map-legend{display:flex;gap:16px;align-items:center;color:var(--muted);font-size:12px;margin:8px 2px 0}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .lg i{width:10px;height:10px;border-radius:50%;display:inline-block}
+
+  /* ── 成就 ── */
+  .ach-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+  @media(max-width:560px){.ach-grid{grid-template-columns:repeat(2,1fr)}}
+  .ach{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+  .ach .ic{font-size:20px}
+  .ach b{display:block;margin:4px 0 2px;font-size:13px}
+  .ach .d{color:var(--muted);font-size:11px;min-height:15px}
+  .bar{height:5px;background:#e6efec;border-radius:3px;margin-top:8px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--primary);border-radius:3px}
+  .ach.locked{opacity:.55}
+
+  /* ── 年度回顾 ── */
+  .ybar{display:flex;align-items:center;gap:10px;margin:8px 0}
+  .ybar .y{width:44px;color:var(--muted);font-size:12px}
+  .ybar .track{flex:1;height:16px;background:#e9f2ef;border-radius:8px;overflow:hidden}
+  .ybar .fill{height:100%;background:linear-gradient(90deg,#5ec3ab,var(--primary));border-radius:8px;display:flex;align-items:center;justify-content:flex-end}
+  .ybar .v{padding:0 8px;font-size:11px;color:#fff;font-weight:600}
+
+  /* ── 点亮列表 ── */
+  .prov-group{margin:10px 0}
+  .prov-name{font-weight:600;font-size:13px;margin-bottom:6px}
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .chip{background:var(--primary-weak);color:var(--primary-dark);border-radius:8px;padding:4px 10px;font-size:13px;cursor:pointer}
+  .chip.lit-dot::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--primary);margin-right:5px}
+
+  .foot-note{color:var(--muted);font-size:11px;line-height:1.8;margin:14px 2px}
+
+  /* ── 表单视图 ── */
+  .field{margin:12px 0}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .inp{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:14px;background:#fff}
+  .dest-preview{background:#f7fbfa;border:1px dashed var(--line);border-radius:10px;padding:10px 12px;font-size:14px;min-height:20px}
+  .dest-preview.empty{color:#b7c6c2;font-style:normal}
+  .banner{background:#fff7e8;border:1px solid #f0dfb6;color:#7a5c14;border-radius:10px;padding:9px 12px;font-size:12px;margin:10px 0;line-height:1.6}
+  .cand{border:1px solid var(--line);border-radius:10px;margin-top:6px;background:#fff;max-height:230px;overflow:auto}
+  .cand button{display:flex;width:100%;justify-content:space-between;align-items:center;border:none;background:transparent;
+    padding:9px 12px;font-size:13px;cursor:pointer;border-bottom:1px dashed #edf3f1;text-align:left}
+  .cand button:hover{background:#f4faf8}
+  .cand .pv{color:var(--muted);font-size:11px}
+  .sel-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px;min-height:34px}
+  .schip{display:inline-flex;align-items:center;gap:6px;background:var(--primary-weak);border:1px solid #bfe5da;color:var(--primary-dark);
+    border-radius:9px;padding:5px 6px 5px 11px;font-size:13px}
+  .schip button{border:none;background:#fff;border-radius:6px;width:22px;height:22px;line-height:1;cursor:pointer;color:var(--primary-dark);font-size:12px}
+  .schip button:hover{background:#e2f2ec}
+  .ghost-btn{border:1px dashed var(--line);background:transparent;color:var(--muted);border-radius:10px;padding:9px 14px;font-size:13px;cursor:not-allowed}
+
+  /* ── 底部抽屉 ── */
+  .mask{position:fixed;inset:0;background:rgba(18,63,54,.45);z-index:100;display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:opacity .22s}
+  .mask.open{opacity:1;pointer-events:auto}
+  .sheet{background:#fff;width:100%;max-width:560px;border-radius:18px 18px 0 0;padding:16px 18px calc(18px + env(safe-area-inset-bottom));
+    transform:translateY(30px);transition:transform .22s;max-height:76vh;overflow:auto}
+  .mask.open .sheet{transform:translateY(0)}
+  .sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .sheet-head b{font-size:16px}
+  .sheet-close{border:none;background:#eef4f2;border-radius:8px;width:30px;height:30px;font-size:15px;cursor:pointer;color:var(--muted)}
+  .route-item{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px dashed #edf3f1;font-size:13px}
+  .route-item .n{font-weight:600}
+  .route-item .m{color:var(--muted);font-size:12px;margin-top:2px}
+  .route-item .amt{color:var(--primary-dark);font-weight:600;white-space:nowrap}
+
+  /* ── toast ── */
+  .toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%) translateY(20px);background:#123f36;color:#fff;
+    padding:10px 18px;border-radius:10px;font-size:13px;z-index:200;opacity:0;transition:all .25s;pointer-events:none}
+  .toast.show{opacity:1;transform:translateX(-50%)}
+
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="tb-title">足迹点亮 · 交互演示<span class="demo-tag">评审稿 · 仅演示</span></div>
+  <div class="tb-actions">
+    <div class="seg" id="viewSeg">
+      <button data-view="map" class="active">足迹页</button>
+      <button data-view="form">路线表单 · 目的地选择</button>
+    </div>
+    <div class="seg" id="devSeg">
+      <button data-dev="desktop" class="active">桌面</button>
+      <button data-dev="mobile">手机 390px</button>
+    </div>
+  </div>
+</div>
+
+<div class="stage">
+<div class="device" id="device">
+
+  <!-- ═══════════ 视图一：足迹页 ═══════════ -->
+  <section id="view-map">
+    <header class="app-head">
+      <div><div class="h-title">旅行路线 · 经费台</div><div class="h-sub">足迹 · 你已点亮 <b id="headCount">0</b> 座城市</div></div>
+      <div class="year-seg" id="yearSeg"></div>
+    </header>
+
+    <div class="stats-row">
+      <div class="stat"><b id="stProv">0</b><span>省级区域</span></div>
+      <div class="stat"><b id="stCity">0</b><span>点亮城市</span></div>
+      <div class="stat"><b id="stYear">0</b><span>点亮年份</span></div>
+      <div class="stat"><b id="stRoute">0</b><span>相关路线</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>点亮地图</h3>
+        <div class="seg small" id="modeSeg">
+          <button data-mode="city" class="active">城市模式</button>
+          <button data-mode="prov">省级模式</button>
+        </div>
+      </div>
+      <div class="map-wrap"><svg id="mapSvg" viewBox="0 0 680 470" role="img" aria-label="中国足迹点亮点阵地图（示意）"></svg></div>
+      <div class="map-legend">
+        <span class="lg"><i style="background:var(--primary)"></i>已点亮</span>
+        <span class="lg"><i style="background:var(--dot-off)"></i>未点亮</span>
+        <span class="lg">点击亮点查看省份详情</span>
+      </div>
+      <div class="map-foot">
+        交互演示稿：点位为<b>示意坐标</b>。正式实现使用官方行政区划中心点（离线内置，不使用任何在线地图服务）；
+        台湾省、香港、澳门、南海诸岛（含附图）与钓鱼岛、赤尾屿将按《公开地图内容表示规范》完整表示，并标注数据来源与审图号。
+      </div>
+    </div>
+
+    <div class="ach-grid" id="achGrid"></div>
+
+    <div class="card">
+      <h3>年度回顾 · 历年新点亮城市</h3>
+      <div id="yearBars"></div>
+    </div>
+
+    <div class="card">
+      <h3>点亮列表</h3>
+      <div id="litList"></div>
+    </div>
+
+    <div class="foot-note">
+      口径说明：点亮以「路线所选标准地名」为准，删除路线不熄灭已有足迹；重复前往同一城市只点亮一次，并计入「再访」。
+      足迹默认仅本人可见；分享链接是否展示足迹，默认关闭、可在个人中心开启。
+    </div>
+  </section>
+
+  <!-- ═══════════ 视图二：路线表单 · 目的地选择 ═══════════ -->
+  <section id="view-form" style="display:none">
+    <header class="app-head">
+      <div><div class="h-title">编辑路线</div><div class="h-sub">目的地已升级为标准地名 · 支持多选</div></div>
+    </header>
+
+    <div class="card">
+      <div id="legacyBanner" class="banner" style="display:none">
+        本路线尚未选择标准地名（旧自由文本目的地已按升级方案清空）。请从下方搜索并选择城市，保存后自动生成目的地。
+      </div>
+
+      <div class="field"><label>路线名称</label><input class="inp" id="fName" value="江南水乡 · 春"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field"><label>出发日期</label><input class="inp" type="date" value="2026-03-28"></div>
+        <div class="field"><label>返回日期</label><input class="inp" type="date" value="2026-04-03"></div>
+      </div>
+
+      <div class="field">
+        <label>目的地（标准地名 · 可多选，按顺序展示）</label>
+        <input class="inp" id="searchBox" placeholder="搜索城市 / 拼音，如：杭州、dali、yn" autocomplete="off">
+        <div class="cand" id="candBox" style="display:none"></div>
+        <div class="sel-chips" id="selChips"></div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <button class="ghost-btn" title="v1.1 提供：把旧 dest / 行程文本交给 AI 提取候选地名（服务端字典校验）">AI 识别候选（v1.1）</button>
+          <button class="ghost-btn" id="btnClear" style="cursor:pointer">清空</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>保存后自动写入「目的地」字段（搜索 / CSV / 分享页 / AI 提示词均读它，无需手工维护）</label>
+        <div class="dest-preview" id="destPreview">（未选择，路线将显示「未选择目的地」）</div>
+      </div>
+
+      <button class="inp" id="btnSave" style="background:var(--primary);color:#fff;border:none;font-weight:600;cursor:pointer">保存路线</button>
+    </div>
+
+    <div class="card">
+      <h3>交互说明（评审要点）</h3>
+      <div style="color:var(--muted);font-size:12.5px;line-height:1.9">
+        ① 搜索支持<b>汉字与拼音</b>；候选按「市 → 省」排序，选中即入 chips，可<b>调整顺序</b>（决定展示顺序），上限 20 个。<br>
+        ② 直辖市 / 港澳 / 台湾为省级条目（无下级市）。国际行程 v1 只到「国家」粒度（如「日本」）。<br>
+        ③ dest 由所选举地名自动生成，用户不再手写；删除全部 chips 时出现上方黄色横幅。<br>
+        ④ 「AI 识别候选」为 v1.1：仅提名，服务端用字典逐一校验，字典外一律丢弃，杜绝幻觉地名。
+      </div>
+    </div>
+  </section>
+
+</div>
+</div>
+
+<!-- 底部抽屉 -->
+<div class="mask" id="sheetMask">
+  <div class="sheet" id="sheet"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+/* ══════════════ 演示数据（示意坐标；正式实现由官方行政区划数据离线生成） ══════════════ */
+/* 省级行政区（34）：n=名称 c=省会/中心城市坐标 cap=1 为省级点 */
+const PROVINCES=[
+ {n:'北京',c:'北京',lon:116.41,lat:39.90,py:'beijing',muni:1},
+ {n:'天津',c:'天津',lon:117.20,lat:39.08,py:'tianjin',muni:1},
+ {n:'上海',c:'上海',lon:121.47,lat:31.23,py:'shanghai',muni:1},
+ {n:'重庆',c:'重庆',lon:106.55,lat:29.56,py:'chongqing',muni:1},
+ {n:'河北',c:'石家庄',lon:114.51,lat:38.04,py:'shijiazhuang'},
+ {n:'山西',c:'太原',lon:112.55,lat:37.87,py:'taiyuan'},
+ {n:'内蒙古',c:'呼和浩特',lon:111.75,lat:40.84,py:'huhehaote'},
+ {n:'辽宁',c:'沈阳',lon:123.43,lat:41.80,py:'shenyang'},
+ {n:'吉林',c:'长春',lon:125.32,lat:43.82,py:'changchun'},
+ {n:'黑龙江',c:'哈尔滨',lon:126.53,lat:45.80,py:'haerbin'},
+ {n:'江苏',c:'南京',lon:118.80,lat:32.06,py:'nanjing'},
+ {n:'浙江',c:'杭州',lon:120.15,lat:30.28,py:'hangzhou'},
+ {n:'安徽',c:'合肥',lon:117.28,lat:31.86,py:'hefei'},
+ {n:'福建',c:'福州',lon:119.30,lat:26.08,py:'fuzhou'},
+ {n:'江西',c:'南昌',lon:115.86,lat:28.68,py:'nanchang'},
+ {n:'山东',c:'济南',lon:117.12,lat:36.65,py:'jinan'},
+ {n:'河南',c:'郑州',lon:113.63,lat:34.75,py:'zhengzhou'},
+ {n:'湖北',c:'武汉',lon:114.31,lat:30.59,py:'wuhan'},
+ {n:'湖南',c:'长沙',lon:112.94,lat:28.23,py:'changsha'},
+ {n:'广东',c:'广州',lon:113.26,lat:23.13,py:'guangzhou'},
+ {n:'广西',c:'南宁',lon:108.37,lat:22.82,py:'nanning'},
+ {n:'海南',c:'海口',lon:110.20,lat:20.04,py:'haikou'},
+ {n:'四川',c:'成都',lon:104.07,lat:30.57,py:'chengdu'},
+ {n:'贵州',c:'贵阳',lon:106.63,lat:26.65,py:'guiyang'},
+ {n:'云南',c:'昆明',lon:102.83,lat:24.88,py:'kunming'},
+ {n:'西藏',c:'拉萨',lon:91.11,lat:29.97,py:'lasa'},
+ {n:'陕西',c:'西安',lon:108.94,lat:34.34,py:'xian'},
+ {n:'甘肃',c:'兰州',lon:103.83,lat:36.06,py:'lanzhou'},
+ {n:'青海',c:'西宁',lon:101.78,lat:36.62,py:'xining'},
+ {n:'宁夏',c:'银川',lon:106.28,lat:38.47,py:'yinchuan'},
+ {n:'新疆',c:'乌鲁木齐',lon:87.62,lat:43.83,py:'wulumuqi'},
+ {n:'台湾',c:'台北',lon:121.56,lat:25.03,py:'taibei',muni:1},
+ {n:'香港',c:'香港',lon:114.17,lat:22.32,py:'xianggang',muni:1},
+ {n:'澳门',c:'澳门',lon:113.55,lat:22.20,py:'aomen',muni:1}
+];
+/* 城市（示意子集，正式版 ~340 个地级市全覆盖）{n,py,p=所属省,lon,lat} */
+const CITIES=[
+ {n:'苏州',py:'suzhou',p:'江苏',lon:120.58,lat:31.30},{n:'无锡',py:'wuxi',p:'江苏',lon:120.31,lat:31.49},
+ {n:'扬州',py:'yangzhou',p:'江苏',lon:119.42,lat:32.39},{n:'南通',py:'nantong',p:'江苏',lon:120.86,lat:31.98},
+ {n:'宁波',py:'ningbo',p:'浙江',lon:121.55,lat:29.87},{n:'绍兴',py:'shaoxing',p:'浙江',lon:120.58,lat:30.03},
+ {n:'温州',py:'wenzhou',p:'浙江',lon:120.70,lat:28.00},{n:'嘉兴',py:'jiaxing',p:'浙江',lon:120.76,lat:30.75},
+ {n:'厦门',py:'xiamen',p:'福建',lon:118.09,lat:24.48},{n:'泉州',py:'quanzhou',p:'福建',lon:118.59,lat:24.91},
+ {n:'青岛',py:'qingdao',p:'山东',lon:120.38,lat:36.07},{n:'烟台',py:'yantai',p:'山东',lon:121.39,lat:37.52},
+ {n:'威海',py:'weihai',p:'山东',lon:122.12,lat:37.51},{n:'洛阳',py:'luoyang',p:'河南',lon:112.45,lat:34.62},
+ {n:'开封',py:'kaifeng',p:'河南',lon:114.30,lat:34.80},{n:'宜昌',py:'yichang',p:'湖北',lon:111.29,lat:30.69},
+ {n:'襄阳',py:'xiangyang',p:'湖北',lon:112.12,lat:32.01},{n:'张家界',py:'zhangjiajie',p:'湖南',lon:110.48,lat:29.13},
+ {n:'岳阳',py:'yueyang',p:'湖南',lon:113.13,lat:29.36},{n:'深圳',py:'shenzhen',p:'广东',lon:114.06,lat:22.55},
+ {n:'珠海',py:'zhuhai',p:'广东',lon:113.58,lat:22.27},{n:'汕头',py:'shantou',p:'广东',lon:116.68,lat:23.35},
+ {n:'佛山',py:'foshan',p:'广东',lon:113.12,lat:23.02},{n:'桂林',py:'guilin',p:'广西',lon:110.29,lat:25.27},
+ {n:'北海',py:'beihai',p:'广西',lon:109.12,lat:21.48},{n:'三亚',py:'sanya',p:'海南',lon:109.51,lat:18.25},
+ {n:'乐山',py:'leshan',p:'四川',lon:103.77,lat:29.55},{n:'阿坝',py:'aba',p:'四川',lon:102.22,lat:31.90},
+ {n:'宜宾',py:'yibin',p:'四川',lon:104.64,lat:28.75},{n:'遵义',py:'zunyi',p:'贵州',lon:106.93,lat:27.73},
+ {n:'大理',py:'dali',p:'云南',lon:100.27,lat:25.61},{n:'丽江',py:'lijiang',p:'云南',lon:100.23,lat:26.86},
+ {n:'西双版纳',py:'xishuangbanna',p:'云南',lon:100.80,lat:22.01},{n:'咸阳',py:'xianyang',p:'陕西',lon:108.71,lat:34.33},
+ {n:'宝鸡',py:'baoji',p:'陕西',lon:107.24,lat:34.36},{n:'敦煌',py:'dunhuang',p:'甘肃',lon:94.66,lat:40.14},
+ {n:'喀什',py:'kashi',p:'新疆',lon:75.99,lat:39.47},{n:'林芝',py:'linzhi',p:'西藏',lon:94.36,lat:29.65},
+ {n:'呼伦贝尔',py:'hulunbeier',p:'内蒙古',lon:119.77,lat:49.21},{n:'大连',py:'dalian',p:'辽宁',lon:121.62,lat:38.91},
+ {n:'延吉',py:'yanji',p:'吉林',lon:129.51,lat:42.89},{n:'大庆',py:'daqing',p:'黑龙江',lon:125.10,lat:46.59},
+ {n:'九江',py:'jiujiang',p:'江西',lon:116.00,lat:29.71},{n:'赣州',py:'ganzhou',p:'江西',lon:114.94,lat:25.85},
+ {n:'大同',py:'datong',p:'山西',lon:113.30,lat:40.08},{n:'承德',py:'chengde',p:'河北',lon:117.93,lat:40.97},
+ {n:'秦皇岛',py:'qinhuangdao',p:'河北',lon:119.60,lat:39.94},{n:'黄山',py:'huangshan',p:'安徽',lon:118.17,lat:29.71},
+ {n:'台中',py:'taizhong',p:'台湾',lon:120.68,lat:24.15},{n:'高雄',py:'gaoxiong',p:'台湾',lon:120.31,lat:22.62}
+];
+/* 南海诸岛（附图内示意点） */
+const SCS=[{n:'永兴岛',lon:112.34,lat:16.83},{n:'黄岩岛',lon:117.75,lat:15.15},{n:'南沙群岛',lon:114.30,lat:9.50},{n:'曾母暗沙',lon:112.35,lat:3.98}];
+
+/* 示例路线（正式实现读 /api/footprints/summary） */
+const ROUTES=[
+ {name:'江南水乡 · 春',year:'2026',date:'2026-03-28 ~ 04-03',spend:6800,places:['苏州','杭州','上海']},
+ {name:'川西金秋环线',year:'2025',date:'2025-10-01 ~ 10-07',spend:9200,places:['成都','阿坝','乐山']},
+ {name:'广深港澳 4 城联游',year:'2025',date:'2025-05-01 ~ 05-05',spend:12400,places:['广州','深圳','香港','澳门']},
+ {name:'云南大理丽江慢游',year:'2024',date:'2024-07-13 ~ 07-20',spend:8900,places:['昆明','大理','丽江']},
+ {name:'齐鲁海滨之旅',year:'2023',date:'2023-04-29 ~ 05-02',spend:4300,places:['青岛','济南']},
+ {name:'北京红叶季',year:'2023',date:'2023-10-20 ~ 10-23',spend:5600,places:['北京']}
+];
+const INTERNATIONAL=[{n:'日本',nTrips:2},{n:'泰国',nTrips:1}]; /* v1 国家级点亮示意 */
+
+/* ══════════════ 状态 ══════════════ */
+const state={year:'all',mode:'city',view:'map'};
+
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $=id=>document.getElementById(id);
+function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),1800);}
+
+/* 投影（示意）：主图 x=(lon-73)*9.4+18, y=(54.8-lat)*11.8+8 */
+const PX=lon=>(lon-73)*9.4+18, PY=lat=>(54.8-lat)*11.8+8;
+
+function litCities(routes){
+  const set=new Set(); routes.forEach(r=>r.places.forEach(p=>set.add(p))); return set;
+}
+function litProvinces(routes){
+  const set=new Set(); const cs=litCities(routes);
+  const capOf=new Map(PROVINCES.map(p=>[p.c,p.n]));   /* 省会城市名 → 省名 */
+  const cityProv=new Map(CITIES.map(c=>[c.n,c.p]));
+  cs.forEach(n=>{
+    if(capOf.has(n)) set.add(capOf.get(n));
+    else if(cityProv.has(n)) set.add(cityProv.get(n));
+    else set.add(n);                                  /* 直辖市/港澳等省级名本身 */
+  });
+  return set;
+}
+
+/* ══════════════ 地图渲染 ══════════════ */
+function renderMap(){
+  const svg=$('mapSvg'); const routes=state.year==='all'?ROUTES:ROUTES.filter(r=>r.year===state.year);
+  const lc=litCities(routes), lp=litProvinces(routes);
+  let out='';
+  /* 邻国参照淡点（仅示意方位，不表示任何边界） */
+  [['首尔',126.98,37.57],['东京',139.69,35.69],['乌兰巴托',106.90,47.89],['河内',105.85,21.03]].forEach(([n,lo,la])=>{
+    out+=`<circle cx="${PX(lo).toFixed(1)}" cy="${PY(la).toFixed(1)}" r="2" fill="#d5e2de"/>`;
+  });
+  /* 城市点 / 省级点 */
+  const drawDot=(x,y,lit,r,label)=>{
+    if(lit) out+=`<circle cx="${x}" cy="${y}" r="${r*2.1}" fill="rgba(21,169,140,.18)"/>`;
+    out+=`<circle cx="${x}" cy="${y}" r="${r}" fill="${lit?'var(--primary)':'var(--dot-off)'}" ${lit?'stroke="#fff" stroke-width="1"':''}/>`;
+    out+=`<circle class="dot-hit ${lit?'':'off'}" data-n="${esc(label)}" data-lit="${lit?1:0}" cx="${x}" cy="${y}" r="11" fill="transparent"/>`;
+  };
+  if(state.mode==='city'){
+    PROVINCES.forEach(p=>drawDot(PX(p.lon).toFixed(1),PY(p.lat).toFixed(1),lp.has(p.n),p.muni?4.6:3.6,p.c));
+    CITIES.forEach(c=>drawDot(PX(c.lon).toFixed(1),PY(c.lat).toFixed(1),lc.has(c.n),3.0,c.n));
+  }else{
+    PROVINCES.forEach(p=>drawDot(PX(p.lon).toFixed(1),PY(p.lat).toFixed(1),lp.has(p.n),p.muni?5.6:4.4,p.n));
+  }
+  /* 钓鱼岛、赤尾屿（示意单点，随台湾省） */
+  out+=`<circle cx="${PX(123.47).toFixed(1)}" cy="${PY(25.72).toFixed(1)}" r="2.2" fill="${lp.has('台湾')?'var(--primary)':'var(--dot-off)'}"/>`;
+  /* 南海诸岛附图 */
+  out+=`<g>
+    <rect x="540" y="330" width="128" height="128" rx="8" fill="#f6fbf9" stroke="var(--line)"/>
+    <text x="552" y="350" font-size="11" fill="var(--muted)">南海诸岛</text>`;
+  SCS.forEach(s=>{ const x=548+(s.lon-108)*9.2, y=452-(s.lat-3)*4.6;
+    const lit=lp.has('海南');
+    out+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.4" fill="${lit?'var(--primary)':'var(--dot-off)'}"/>`;});
+  out+=`</g>`;
+  svg.innerHTML=out;
+  svg.querySelectorAll('.dot-hit').forEach(el=>el.addEventListener('click',()=>{
+    if(el.dataset.lit==='1') openSheet(el.dataset.n); else toast('尚未点亮：把它加进一条路线试试');
+  }));
+  updateStats(routes,lc,lp);
+}
+
+/* ══════════════ 统计 / 成就 / 回顾 / 列表 ══════════════ */
+function updateStats(routes,lc,lp){
+  $('stProv').textContent=lp.size; $('stCity').textContent=lc.size;
+  $('stYear').textContent=new Set(routes.map(r=>r.year)).size; $('stRoute').textContent=routes.length;
+  if(state.year==='all') $('headCount').textContent=lc.size; else $('headCount').textContent=litCities(ROUTES).size;
+}
+const ACHIEVEMENTS=()=>{ const lc=litCities(ROUTES), lp=litProvinces(ROUTES);
+  const byYear={}; ROUTES.forEach(r=>r.places.forEach(p=>{ (byYear[r.year]||(byYear[r.year]=new Set())).add(p); }));
+  const best=Object.entries(byYear).sort((a,b)=>b[1].size-a[1].size)[0];
+  return [
+    {ic:'🧭',t:'首次点亮',d:'2023 年 · 北京',p:100,lock:false},
+    {ic:'🏞️',t:'省份收藏家',d:`已点亮 ${lp.size} / 34 个省级区域`,p:Math.round(lp.size/34*100),lock:false},
+    {ic:'🏙️',t:'城市探索者',d:`已点亮 ${lc.size} / 50 城`,p:Math.min(100,Math.round(lc.size/50*100)),lock:false},
+    {ic:'📈',t:'单年之最',d:`${best[0]} 年 · ${best[1].size} 城`,p:100,lock:false},
+    {ic:'📅',t:'连续点亮',d:'2023–2026 连续 4 年',p:100,lock:false},
+    {ic:'🔁',t:'二刷之城',d:'重复前往同一城市即解锁',p:0,lock:true}
+  ];
+};
+function renderAchievements(){
+  $('achGrid').innerHTML=ACHIEVEMENTS().map(a=>`
+    <div class="ach ${a.lock?'locked':''}"><span class="ic">${a.ic}</span><b>${esc(a.t)}</b>
+    <div class="d">${esc(a.d)}</div><div class="bar"><i style="width:${a.p}%"></i></div></div>`).join('');
+}
+function renderYearBars(){
+  const byYear={}; ROUTES.forEach(r=>r.places.forEach(p=>{ (byYear[r.year]||(byYear[r.year]=new Set())).add(p); }));
+  const max=Math.max(...Object.values(byYear).map(s=>s.size));
+  $('yearBars').innerHTML=Object.keys(byYear).sort().map(y=>`
+    <div class="ybar"><span class="y">${esc(y)}</span><div class="track">
+    <div class="fill" style="width:${byYear[y].size/max*100}%"><span class="v">${byYear[y].size} 城</span></div>
+    </div></div>`).join('');
+}
+function renderLitList(){
+  const lc=litCities(ROUTES); const byProv={};
+  const byName=new Map([...PROVINCES.map(p=>[p.c,p]),...CITIES.map(c=>[c.n,c])]);
+  lc.forEach(n=>{const it=byName.get(n); const key=it?(it.p||it.n):'其他'; (byProv[key]||(byProv[key]=[])).push(n);});
+  const order=Object.keys(byProv).sort((a,b)=>byProv[b].length-byProv[a].length);
+  $('litList').innerHTML=order.map(pv=>`
+    <div class="prov-group"><div class="prov-name">${esc(pv)} <span style="color:var(--muted);font-weight:400">· ${byProv[pv].length}</span></div>
+    <div class="chips">${byProv[pv].map(c=>`<span class="chip lit-dot" data-p="${esc(pv)}">${esc(c)}</span>`).join('')}</div></div>`).join('')
+    + (INTERNATIONAL.length?`<div class="prov-group"><div class="prov-name">国际 · 国家/地区</div>
+       <div class="chips">${INTERNATIONAL.map(c=>`<span class="chip" style="background:#eef1fb;color:#3b5bdb">🌐 ${esc(c.n)} ×${c.nTrips}</span>`).join('')}</div></div>`:'');
+  $('litList').querySelectorAll('.chip[data-p]').forEach(el=>el.addEventListener('click',()=>openSheet(el.dataset.p)));
+}
+
+/* ══════════════ 底部抽屉 ══════════════ */
+function openSheet(name){
+  /* name 可能是城市或省级名 → 归到省级 */
+  const byName=new Map([...PROVINCES.map(p=>[p.c,p]),...CITIES.map(c=>[c.n,c])]);
+  const it=byName.get(name); const prov=it?(it.p||it.n):name;
+  const routes=ROUTES.filter(r=>r.places.some(p=>{const x=byName.get(p);return x&&((x.p||x.n)===prov);}));
+  const cities=new Set(); routes.forEach(r=>r.places.forEach(p=>{const x=byName.get(p); if(x&&((x.p||x.n)===prov)) cities.add(p);}));
+  const spend=routes.reduce((s,r)=>s+r.spend,0);
+  $('sheet').innerHTML=`
+    <div class="sheet-head"><b>${esc(prov)}</b><button class="sheet-close" id="sheetX">✕</button></div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">点亮 ${cities.size} 城 · ${routes.length} 条路线 · 累计花费 ¥${spend.toLocaleString('zh-CN')}</div>
+    <div class="chips" style="margin-bottom:12px">${[...cities].map(c=>`<span class="chip lit-dot">${esc(c)}</span>`).join('')}</div>
+    ${routes.map(r=>`<div class="route-item"><div><div class="n">${esc(r.name)}</div>
+      <div class="m">${esc(r.date)} · ${esc(r.places.join(' · '))}</div></div>
+      <div class="amt">¥${r.spend.toLocaleString('zh-CN')}</div></div>`).join('')}
+    <div style="color:var(--muted);font-size:11px;margin-top:10px">正式版：此处为该省全部已点亮城市与关联路线；点击城市可跳转流水。</div>`;
+  $('sheetMask').classList.add('open');
+  $('sheetX').onclick=()=>$('sheetMask').classList.remove('open');
+}
+$('sheetMask').addEventListener('click',e=>{ if(e.target===$('sheetMask')) $('sheetMask').classList.remove('open'); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') $('sheetMask').classList.remove('open'); });
+
+/* ══════════════ 年份 / 模式 / 视图切换 ══════════════ */
+function renderYearSeg(){
+  const years=['all','2026','2025','2024','2023'];
+  $('yearSeg').innerHTML=years.map(y=>`<button data-y="${y}" class="${state.year===y?'active':''}">${y==='all'?'全部':y}</button>`).join('');
+  $('yearSeg').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{ state.year=b.dataset.y; renderYearSeg(); renderMap(); }));
+}
+$('modeSeg').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+  state.mode=b.dataset.mode;
+  $('modeSeg').querySelectorAll('button').forEach(x=>x.classList.toggle('active',x===b));
+  renderMap();
+}));
+$('viewSeg').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+  state.view=b.dataset.view;
+  $('viewSeg').querySelectorAll('button').forEach(x=>x.classList.toggle('active',x===b));
+  $('view-map').style.display=state.view==='map'?'':'none';
+  $('view-form').style.display=state.view==='form'?'':'none';
+}));
+$('devSeg').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+  $('devSeg').querySelectorAll('button').forEach(x=>x.classList.toggle('active',x===b));
+  $('device').classList.toggle('mobile',b.dataset.dev==='mobile');
+}));
+
+/* ══════════════ 表单：目的地选择器 ══════════════ */
+const sel=[]; /* 已选地名（有序） */
+const CAND=[...PROVINCES.filter(p=>p.muni).map(p=>({n:p.c,pv:p.n,py:p.py,prov:1})),
+            ...CITIES.map(c=>({n:c.n,pv:c.p,py:c.py}))];
+function renderChips(){
+  $('selChips').innerHTML=sel.map((n,i)=>`
+    <span class="schip">${esc(n)}
+      <button data-act="l" data-i="${i}" title="左移" ${i===0?'disabled':''}>←</button>
+      <button data-act="r" data-i="${i}" title="右移" ${i===sel.length-1?'disabled':''}>→</button>
+      <button data-act="x" data-i="${i}" title="移除">✕</button>
+    </span>`).join('');
+  $('selChips').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    const i=+b.dataset.i;
+    if(b.dataset.act==='x') sel.splice(i,1);
+    if(b.dataset.act==='l'&&i>0) [sel[i-1],sel[i]]=[sel[i],sel[i-1]];
+    if(b.dataset.act==='r'&&i<sel.length-1) [sel[i+1],sel[i]]=[sel[i],sel[i+1]];
+    renderChips();
+  }));
+  const pv=$('destPreview');
+  if(sel.length){ pv.textContent=sel.join(' · '); pv.classList.remove('empty'); $('legacyBanner').style.display='none'; }
+  else { pv.textContent='（未选择，路线将显示「未选择目的地」）'; pv.classList.add('empty'); $('legacyBanner').style.display='block'; }
+}
+function renderCand(q){
+  const box=$('candBox');
+  if(!q){ box.style.display='none'; box.innerHTML=''; return; }
+  const s=q.toLowerCase();
+  let hits=CAND.filter(c=>c.n.includes(q)||(c.py&&c.py.includes(s)))
+    .filter(c=>!sel.includes(c.n)).slice(0,8);
+  /* 按省名搜索 → 直接给该省城市（如「云南」→ 大理/丽江/…） */
+  const provHit=PROVINCES.find(p=>p.n===q||p.c===q);
+  if(provHit){
+    CITIES.filter(c=>c.p===provHit.n&&!sel.includes(c.n)).forEach(c=>{
+      if(!hits.find(h=>h.n===c.n)) hits.unshift({n:c.n,pv:c.p,py:c.py});
+    });
+    hits=hits.slice(0,8);
+  }
+  box.style.display=hits.length?'block':'none';
+  box.innerHTML=hits.length?hits.map(c=>`
+    <button data-n="${esc(c.n)}"><span>${esc(c.n)}</span><span class="pv">${esc(c.pv)}${c.prov?' · 省级':''}</span></button>`).join('')
+    :'<button disabled><span style="color:#b7c6c2">字典中未找到该地名（正式版以 GB/T 2260 字典为准）</span></button>';
+  box.querySelectorAll('button[data-n]').forEach(b=>b.addEventListener('click',()=>{
+    if(sel.length>=20){ toast('单条路线最多 20 个地名'); return; }
+    sel.push(b.dataset.n); renderChips(); renderCand($('searchBox').value); $('searchBox').focus();
+  }));
+}
+$('searchBox').addEventListener('input',e=>renderCand(e.target.value.trim()));
+$('searchBox').addEventListener('focus',e=>{ if(e.target.value.trim()) renderCand(e.target.value.trim()); });
+$('btnClear').addEventListener('click',()=>{ sel.length=0; renderChips(); toast('已清空（模拟存量 dest 清空后的状态）'); });
+$('btnSave').addEventListener('click',()=>{
+  toast(sel.length?('已保存：目的地写入「'+sel.join(' · ')+'」'):'已保存（目的地为空）');
+});
+/* 预置一条已选路线，方便直接评审 chips 交互 */
+sel.push('苏州','杭州','上海'); renderChips();
+
+/* ══════════════ 启动 ══════════════ */
+renderYearSeg(); renderMap(); renderAchievements(); renderYearBars(); renderLitList();
+</script>
+</body>
+</html>

@@ -82,8 +82,12 @@ function clearCookie(res) {
 }
 
 /* 读取会话并返回用户；失败返回 null（不抛错）
- * 服务端 TTL 校验：超过 SESSION_TTL_MS 无活动则会话失效并删除 */
+ * 服务端 TTL 校验：超过 SESSION_TTL_MS 无活动则会话失效并删除
+ * 单请求内缓存：app.js 的强制改密门禁与各业务 handler 会先后调用，避免重复查库与重复
+ * touchSession（每次 touch 都是一次 WAL 写入）。 */
 function authFromReq(req) {
+  if (req._authUserCache !== undefined) return req._authUserCache;
+  req._authUserCache = null;
   const sid = parseCookies(req).sid;
   if (!sid) return null;
   const s = db().prepare('SELECT * FROM sessions WHERE id = ?').get(sid);
@@ -98,6 +102,7 @@ function authFromReq(req) {
   touchSession(sid);
   req._sid = sid;
   req.user = u;
+  req._authUserCache = u;
   return u;
 }
 

@@ -44,6 +44,18 @@ async function main() {
   check('登录响应 Set-Cookie sid（§3.3）', /^sid=/.test(r.setCookie || ''), r.setCookie);
   adminCookie = r.setCookie;
 
+  /* 强制改密：服务端硬门禁（仅前端跳转可被直接调 API 绕过） */
+  r = await req('GET', '/api/routes', null, adminCookie);
+  check('未改密时业务 API → 403 PASSWORD_RESET_REQUIRED（§8.3 服务端门禁）',
+    r.status === 403 && r.json.code === 'PASSWORD_RESET_REQUIRED', r);
+  r = await req('GET', '/api/auth/me', null, adminCookie);
+  check('强制改密期间 /auth/me 放行（前端据此渲染引导页）',
+    r.status === 200 && r.json.data.force_reset === true, r);
+  r = await req('POST', '/api/auth/password', { oldPassword: '123456', newPassword: 'adminnew123' }, adminCookie);
+  check('首登改密成功（§4.2 /password）', r.status === 200 && r.json.ok, r);
+  r = await req('GET', '/api/auth/me', null, adminCookie);
+  check('改密后 force_reset 清零（§6.6）', r.json.data.force_reset === false, r.json && r.json.data);
+
   // 种子路线全员可见
   r = await req('GET', '/api/routes', null, adminCookie);
   check('种子路线已导入且管理员可见（§2.3）', r.status === 200 && r.json.data.list.length >= 4, r);
@@ -147,12 +159,8 @@ async function main() {
   r = await req('POST', '/api/admin/users/1/role', { role: 'user' }, adminCookie);
   check('不能修改自己角色（§5.7）', r.status === 400, r);
 
-  /* 改密 */
+  /* 改密（首登改密已在文件开头完成，此处验证凭据切换与失败分支） */
   section('T3 auth.js — 改密与强制改密');
-  r = await req('POST', '/api/auth/password', { oldPassword: '123456', newPassword: 'adminnew123' }, adminCookie);
-  check('改密成功（§4.2 /password）', r.status === 200 && r.json.ok, r);
-  r = await req('GET', '/api/auth/me', null, adminCookie);
-  check('改密后 force_reset 清零（§6.6）', r.json.data.force_reset === false, r.json && r.json.data);
   r = await req('POST', '/api/auth/login', { login: 'admin', password: '123456' });
   check('旧密码失效 → 401', r.status === 401, r);
   r = await req('POST', '/api/auth/login', { login: 'admin', password: 'adminnew123' });
@@ -279,11 +287,15 @@ async function main() {
   check('stats/trend 消费 q：趋势总额 === summary grand（口径一致）', r.status === 200
     && Math.abs(kwTrendSum - (kwSum.grand || 0)) < 0.01, { kwTrendSum, grand: kwSum.grand });
 
-  // 清空保留种子
+  // 清空保留种子（破坏性操作需显式确认）
   r = await req('POST', '/api/routes', { name: '临时路线', year: '2026', exp: { 交通: 10 } }, userCookie);
   const tmpId = r.json.data.id;
   r = await req('DELETE', '/api/routes', null, userCookie);
-  check('DELETE / 清空本人全部 → ok（§4.3）', r.status === 200 && r.json.ok, r);
+  check('DELETE / 缺少确认 → 400 CONFIRM_REQUIRED', r.status === 400 && r.json.code === 'CONFIRM_REQUIRED', r);
+  r = await req('GET', '/api/routes?hideSeed=1', null, userCookie);
+  check('未确认时数据未被删除', r.json.data.list.length === 1, r.json && r.json.data.list.length);
+  r = await req('DELETE', '/api/routes?confirm=DELETE_ALL', null, userCookie);
+  check('DELETE / 清空本人全部 → ok（§4.3）', r.status === 200 && r.json.ok && r.json.data.deleted >= 1, r);
   r = await req('GET', '/api/routes?hideSeed=1', null, userCookie);
   check('清空后 hideSeed=1 本人为 0（种子保留）', r.json.data.list.length === 0, r);
 

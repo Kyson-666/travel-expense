@@ -190,11 +190,13 @@ async function handle(req, res, url, body) {
     const counts = expenseCounts(ids);
     const tcounts = travelerCounts(ids);
     const daysMap = dbModule.daysForRoutes(ids);
+    const placesMap = dbModule.placesForRoutes(ids);
     return ok(res, {
       list: rows.map(r => Object.assign(dbModule.routeToJson(r), {
         expense_count: counts[r.id] || 0,
         traveler_count: tcounts[r.id] || 0,
-        day_plans: daysMap[r.id] || []
+        day_plans: daysMap[r.id] || [],
+        places: placesMap[r.id] || []
       })),
       total, page, pageSize
     });
@@ -214,10 +216,18 @@ async function handle(req, res, url, body) {
     return created(res, rec);
   }
 
-  /* DELETE /api/routes 清空本人全部 */
+  /* DELETE /api/routes 清空本人全部
+   * 破坏性操作必须显式确认（避免误触 / 脚本误调）：query 或 body 携带 confirm=DELETE_ALL。
+   * 返回值由 true 改为 { deleted }，便于调用方核对实际删除条数；同时写审计留痕。 */
   if (rest === '' && method === 'DELETE') {
-    db().prepare('DELETE FROM routes WHERE owner_id = ? AND is_seed = 0').run(user.id);
-    return ok(res, true);
+    const confirm = String(query.confirm || (body && body.confirm) || '');
+    if (confirm !== 'DELETE_ALL') {
+      return fail(res, 400, '清空全部路线需显式确认（confirm=DELETE_ALL）', { code: 'CONFIRM_REQUIRED' });
+    }
+    const n = db().prepare('DELETE FROM routes WHERE owner_id = ? AND is_seed = 0').run(user.id).changes;
+    dbModule.audit(user.id, 'clear_routes', 'routes', null,
+      `清空本人全部路线（${n} 条，含流水/同行人/按天行程级联删除）`, req.socket.remoteAddress || '');
+    return ok(res, { deleted: n });
   }
 
   /* GET /api/routes/export?fmt=csv|json — 个人导出（仅本人数据，不含示例）
@@ -235,6 +245,8 @@ async function handle(req, res, url, body) {
           j.day_plans = dbModule.listRouteDays(r.id);
           j.travelers = ledger.travelers;
           j.expenses = ledger.expenses;
+          /* 目的地标准地名（adcode 数组，导入时按字典还原；dest 字段为镜像文本仅供参考） */
+          j.places = dbModule.listRoutePlaces(r.id).map(p => p.adcode);
           return j;
         })
       });
@@ -275,6 +287,15 @@ async function handle(req, res, url, body) {
     };
     const dedupKey = (name, year, dest, start, end) =>
       [name, year, dest, start, end].map(v => String(v == null ? '' : v).trim()).join('|');
+    /* 去重键中的目的地必须与「入库后的 dest」同口径：
+     * dest 已退化为 route_places 的物化镜像（无 places 的条目入库后 dest 为空），
+     * 故按 places 反推有效 dest，避免旧文本与镜像不一致导致判重失效。 */
+    const destKey = (item) => {
+      if (Array.isArray(item.places) && item.places.length) {
+        return dbModule.resolvePlaceRefs(item.places).places.map(p => p.name).join(' · ');
+      }
+      return '';
+    };
 
     /* 构建已存在的 key 集合用于去重 */
     const existing = new Set(
@@ -288,7 +309,7 @@ async function handle(req, res, url, body) {
         return;
       }
       const d = effDates(item);
-      const key = dedupKey(item.name, item.year, item.dest, d.start, d.end);
+      const key = dedupKey(item.name, item.year, destKey(item), d.start, d.end);
       if (existing.has(key) || seenInBatch.has(key)) {
         duplicates++;
         return;
@@ -304,9 +325,17 @@ async function handle(req, res, url, body) {
         currency: String(item.currency || 'CNY'), budget_total: dbModule.num(item.budget_total), budget_daily: dbModule.num(item.budget_daily),
         /* 携带完整流水时，不再由 exp 生成「期初流水」——否则会与还原的流水重复计账 */
         exp: hasLedger ? {} : ((item.exp && typeof item.exp === 'object') ? item.exp : {}),
+        /* 目的地标准地名（adcode 或简名数组）；字典外条目在插入时被丢弃并在下方计入 errors */
+        places: Array.isArray(item.places) ? item.places : undefined,
         notes: String(item.notes || '')
       };
       const rec = dbModule.insertRoute(user.id, clean, false);
+      if (Array.isArray(item.places) && item.places.length) {
+        const resolved = dbModule.resolvePlaceRefs(item.places);
+        if (resolved.misses.length) {
+          errors.push('第 ' + (i + 1) + ' 条部分目的地不在标准字典中，已丢弃：' + resolved.misses.join('、'));
+        }
+      }
       if (rec && rec.id && (Array.isArray(item.travelers) || Array.isArray(item.expenses))) {
         const r = dbModule.importLedger(rec.id, user.id, item.travelers, item.expenses);
         travelersRestored += r.travelers;
@@ -479,7 +508,10 @@ async function handle(req, res, url, body) {
     if (sub) return fail(res, 404, '接口不存在');
 
     if (method === 'GET') {
-      return ok(res, Object.assign(dbModule.routeToJson(row), { day_plans: dbModule.listRouteDays(id) }));
+      return ok(res, Object.assign(dbModule.routeToJson(row), {
+        day_plans: dbModule.listRouteDays(id),
+        places: dbModule.listRoutePlaces(id)
+      }));
     }
 
     if (seedReadonly) {

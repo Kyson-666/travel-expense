@@ -86,8 +86,10 @@ async function main() {
   runStep('冒烟 smoke-days（行程按天：景点/住宿）', () => runNode(path.join(__dirname, 'smoke-days.test.js'), {}, ROOT));
   runStep('冒烟 smoke-cors（跨域预检 / 写方法白名单）', () => runNode(path.join(__dirname, 'smoke-cors.test.js'), {}, ROOT));
   runStep('冒烟 smoke-fixes（排序权威 / 币种不变量 / 导出导入往返 / 去重键 / 分享含结算）', () => runNode(path.join(__dirname, 'smoke-fixes.test.js'), {}, ROOT));
+  runStep('冒烟 smoke-footprint（足迹点亮：字典/镜像/点亮流水/成就/备份往返）', () => runNode(path.join(__dirname, 'smoke-footprint.test.js'), {}, ROOT));
   runStep('冒烟 smoke-offline（离线幂等 / 批量同步 / 降级 / 拒绝 / 幂等删除）', () => runNode(path.join(__dirname, 'smoke-offline.test.js'), {}, ROOT));
   runStep('单测 offline-engine（MemoryAdapter / 退避 / 401 保全 / 幂等投影 / 本地消解）', () => runNode(path.join(__dirname, 'offline-engine.test.js'), {}, ROOT));
+  runStep('单测 body-decode（分片解码 / 空体 / 非法 JSON / 字节与字符上限）', () => runNode(path.join(__dirname, 'body-decode.test.js'), {}, ROOT));
 
   console.log('\n══════════════════════════════════');
   let fail = 0;

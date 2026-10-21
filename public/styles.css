@@ -367,3 +367,103 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 .led.pending .amt{color:var(--muted)}
 .pill-pending{background:#fff4e5;color:#8a6100}
 .pill-rejected{background:#fdece8;color:var(--danger)}
+
+/* ==========================================================================
+   足迹点亮（#/footprint）+ 标准地名选择器（v1.2）
+   ========================================================================== */
+
+/* ---------- 工作台足迹入口卡 ---------- */
+.fp-entry{display:flex;align-items:center;gap:12px;cursor:pointer}
+.fp-entry:hover{border-color:var(--primary)}
+.fp-entry-icon{width:42px;height:42px;border-radius:12px;background:var(--primary-l);color:var(--primary-d);
+  display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.fp-entry-icon svg{width:22px;height:22px}
+.fp-entry-text{flex:1;min-width:0}
+.fp-entry-title{font-weight:700;font-size:15px}
+.fp-entry-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+.fp-entry-arrow{color:var(--muted);font-size:22px;font-weight:700}
+
+/* ---------- 足迹页 ---------- */
+.fp-head{display:flex;justify-content:space-between;align-items:flex-start;margin:10px 0 12px}
+.fp-title{font-size:19px;font-weight:800}
+.fp-sub{font-size:12.5px;color:var(--muted);margin-top:3px}
+.fp-stats{margin-bottom:12px}
+.fp-unit{font-size:12px;color:var(--muted);font-weight:500}
+.fp-note{font-size:11.5px;color:var(--muted);line-height:1.8;margin-top:14px;padding:0 2px}
+/* 移动端：地图默认收起（成就/列表优先），展开后显示 */
+.fp-map-toggle{display:none}
+.fp-map-panel{overflow:hidden}
+.fp-controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.fp-map-wrap{background:#fbfefd;border:1px solid var(--line);border-radius:12px;padding:6px}
+.fp-map-wrap svg{width:100%;height:auto;display:block}
+@keyframes fpPop{0%{transform:scale(0);opacity:0}70%{transform:scale(1.35)}100%{transform:scale(1);opacity:1}}
+.fp-pop{animation:fpPop .4s ease both;transform-box:fill-box;transform-origin:center}
+@media(prefers-reduced-motion:reduce){.fp-pop{animation:none}}
+.fp-countries{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;font-size:13px}
+.fp-c-label{color:var(--muted)}
+.fp-chip-lit{background:var(--primary-l);color:var(--primary-d);border-color:#bfe5da}
+.fp-chip-lit i{font-style:normal;color:var(--muted);font-size:11px;margin-left:5px}
+.fp-chip-country{background:#eef2fb;color:#4b5fbe;border-color:#d5dcf5}
+.fp-prov-group{margin-bottom:12px}
+.fp-prov-name{font-size:13.5px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.fp-prov-count{background:var(--primary-l);color:var(--primary-d);border-radius:8px;font-size:11px;padding:1px 7px;font-weight:600}
+.fp-sheet-count{font-size:13px;color:var(--muted);margin-bottom:10px}
+
+/* 成就 */
+.fp-ach-head{margin-bottom:14px}
+.fp-ach-big{font-size:16px;font-weight:800}
+.fp-ach-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.fp-ach{transition:.15s}
+.fp-ach-done{border-color:#bfe5da;background:linear-gradient(160deg,#f6fffb,#fff)}
+.fp-ach-title{font-weight:700;font-size:14.5px}
+.fp-ach-desc{font-size:12.5px;color:var(--muted);line-height:1.6}
+
+/* 回顾 */
+.fp-year-row{padding:10px 0;border-bottom:1px dashed var(--line)}
+.fp-year-row:last-child{border-bottom:none}
+.fp-year-head{display:flex;justify-content:space-between;font-size:14px;margin-bottom:6px}
+.fp-year-n{color:var(--primary-d);font-weight:800}
+.fp-year-detail{margin-top:8px}
+.fp-year-prov{font-size:12px;color:var(--muted);margin-top:6px}
+
+/* 管理 */
+.fp-pending-row{display:flex;align-items:center;gap:10px;padding:10px 11px;border:1px solid var(--line);
+  border-radius:12px;margin-bottom:7px;background:#fff}
+.fp-pending-main{flex:1;min-width:0}
+.fp-pending-meta{font-size:12px;color:var(--muted);margin-left:8px}
+
+@media(max-width:560px){
+  .fp-head{margin-top:8px}
+  .fp-map-toggle{display:inline-flex;margin-bottom:10px}
+  /* 移动端默认收起地图：信息密度优先（成就/列表先看） */
+  .fp-map-panel{display:none;margin-top:0}
+  .fp-map-panel.fp-map-open{display:block}
+  .fp-map-wrap svg{min-height:200px}
+  .fp-ach-grid{grid-template-columns:1fr 1fr}
+  .fp-ach-title{font-size:13.5px}
+  .fp-controls{gap:6px}
+  .fp-controls .chip{font-size:12px;padding:7px 11px;min-height:36px}
+}
+
+/* ---------- 标准地名选择器 ---------- */
+.pp{display:flex;flex-direction:column;gap:8px}
+.pp-chips{display:flex;flex-wrap:wrap;gap:7px;min-height:34px}
+.pp-chip{display:inline-flex;align-items:center;gap:5px;background:var(--primary-l);border:1px solid #bfe5da;
+  color:var(--primary-d);border-radius:9px;padding:4px 6px 4px 10px;font-size:13px;font-weight:600}
+.pp-chip-prov{background:#eef2fb;border-color:#d5dcf5;color:#4b5fbe}
+.pp-chip-country{background:#f0f6fb;border-color:#d3e4f2;color:#3a7ab5}
+.pp-chip button{border:none;background:#fff;border-radius:6px;min-width:24px;min-height:24px;line-height:1;
+  cursor:pointer;color:inherit;font-size:12px;display:inline-flex;align-items:center;justify-content:center}
+.pp-chip button:disabled{opacity:.35;cursor:default}
+.pp-box{position:relative}
+.pp-input{border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;font-size:16px}
+.pp-drop{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:60;background:#fff;border:1px solid var(--line);
+  border-radius:12px;box-shadow:0 12px 28px rgba(20,90,75,.14);max-height:300px;overflow-y:auto}
+.pp-item{width:100%;display:flex;align-items:baseline;gap:8px;padding:11px 12px;border:none;background:#fff;
+  font-size:14px;cursor:pointer;text-align:left;font-family:inherit;color:var(--text);min-height:44px}
+.pp-item:hover{background:var(--primary-l)}
+.pp-item-name{font-weight:600}
+.pp-item-meta{font-size:11.5px;color:var(--muted);margin-left:auto;flex:0 0 auto}
+.pp-empty{padding:14px;text-align:center;color:var(--muted);font-size:13px}
+.pp-hint{font-size:11.5px;color:var(--muted)}
+@media(max-width:560px){.pp-chip button{min-width:28px;min-height:28px}}

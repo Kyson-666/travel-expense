@@ -2,10 +2,12 @@
 import { store, toast, api, navigate, esc, fmt, fmtMoney, CATS, parseDatesFromRange, fmtTime, getServerUrl, isNetworkError } from './api.js';
 import { COLORS, totalOf, donut, trendBar } from './charts.js';
 import * as ledger from './ledger.js';
+import { createPlacePicker, placesText } from './places-picker.js';
 import { getOfflineEngine } from './offline.js';
 
 let routes = [];
 let searchTimer = null;
+let destPicker = null;   // 目的地标准地名选择器（路线表单）
 let state = { filterYear: 'all', search: '', curId: null, detailId: null, detailTab: 'overview', page: 1, total: 0, pageSize: 50, years: [], editReturnDetail: null };
 
 /* 全量年份（由 GET /api/routes/years 下发），工作台年份胶囊据此渲染。
@@ -135,6 +137,16 @@ export function renderWorkbench() {
     <div class="grid" id="routeGrid"></div>
     <div class="pager" id="routePager" style="display:none;margin:12px 0 4px"></div>
     <div style="height:16px"></div>
+    <div class="fp-entry panel" id="fpEntry" style="cursor:pointer;display:flex;align-items:center;gap:12px">
+      <div class="fp-entry-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 6-9 12-9 12s-9-6-9-12a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      </div>
+      <div class="fp-entry-text">
+        <div class="fp-entry-title">我的足迹地图</div>
+        <div class="fp-entry-sub" id="fpEntrySub">点亮走过的城市 · 成就与年度回顾</div>
+      </div>
+      <div class="fp-entry-arrow">›</div>
+    </div>
     <div class="stat-cards" id="statCards"></div>
     <div class="flex2">
       <div class="panel">
@@ -176,6 +188,13 @@ export function renderWorkbench() {
     e.target.value = '';
   };
   document.getElementById('routeGrid').onclick = onGridClick;
+  const fpEntry = document.getElementById('fpEntry');
+  if (fpEntry) fpEntry.onclick = () => { location.hash = '#/footprint'; };
+  /* 入口卡数字亮点：异步拉取足迹汇总，失败静默（足迹页内部仍可正常加载） */
+  api.get('/footprints/summary').then(s => {
+    const el = document.getElementById('fpEntrySub');
+    if (el && s) el.textContent = `已点亮 ${s.cityCount} 座城市 · ${s.provinceCount} 个省级行政区${s.countryCount ? ' · ' + s.countryCount + ' 个国家/地区' : ''}`;
+  }).catch(() => { /* 足迹数据不可用时入口卡显示静态文案 */ });
   renderYearChips();
   renderRoutes();
   renderPager();
@@ -705,7 +724,24 @@ function openForm(id) {
   }
   document.getElementById('f_budget_total').value = r ? (r.budget_total || '') : '';
   document.getElementById('f_budget_daily').value = r ? (r.budget_daily || '') : '';
-  document.getElementById('f_dest').value = r ? (r.dest || '') : '';
+  /* 目的地：标准地名多选（真源），f_dest 为只读镜像预览（AI 规划读取该镜像文本） */
+  const destBox = document.getElementById('f_dest');
+  destBox.value = r ? (r.dest || '') : '';
+  destBox.readOnly = true;
+  destBox.style.background = '#f5f7f6';
+  destBox.style.cursor = 'not-allowed';
+  destBox.placeholder = '由所选标准地名自动生成';
+  const banner = document.getElementById('f_destBanner');
+  if (banner) banner.style.display = (r && !(r.places && r.places.length)) ? '' : 'none';
+  const pickerBox = document.getElementById('f_destPicker');
+  if (pickerBox) {
+    pickerBox.innerHTML = '';
+    destPicker = createPlacePicker(pickerBox, {
+      selected: (r && r.places) || [],
+      onChange: (list) => { destBox.value = placesText(list); syncAiChatBtn(); }
+    });
+    destPicker.setSelection((r && r.places) || []);
+  }
   /* 行程按天：无日期时用自由框（镜像文本），有日期时按天生成 N 个框 */
   const _sf = document.getElementById('f_scenic');
   const _hf = document.getElementById('f_hotel');
@@ -1021,6 +1057,9 @@ async function saveForm() {
     currency: document.getElementById('f_currency').value || 'CNY',
     budget_total: parseFloat(document.getElementById('f_budget_total').value) || 0,
     budget_daily: parseFloat(document.getElementById('f_budget_daily').value) || 0,
+    /* 目的地标准地名（adcode 数组，服务端据此写 route_places 并回写 dest 镜像）；
+     * dest 文本仅作可读预览，后端一律以 places 为准重新生成 */
+    places: destPicker ? destPicker.getSelection().map(p => p.adcode) : [],
     dest: document.getElementById('f_dest').value.trim(),
     /* 行程按天：提交 day_plans（服务端据此写 route_days 并回写 scenic/hotel 镜像）。
      * 字段名不能叫 days —— 那是「天数」(number)，会与本字段互相覆盖。 */
@@ -1065,6 +1104,20 @@ async function saveForm() {
     }
     return;
   } catch (e) { toast(e.message); }
+}
+
+/* 足迹页「待标注路线 → 去标注」入口：按 id 打开路线编辑表单（优先当前工作台缓存；
+ * 缓存没有（如从足迹页直接进入）时先拉取列表再打开。 */
+export async function openRouteEditor(id) {
+  if (!id) return false;
+  let r = routes.find(x => x.id === id);
+  if (!r) {
+    try { await loadRoutes(); } catch (e) { /* loadRoutes 内部已处理错误分支 */ }
+    r = routes.find(x => x.id === id);
+  }
+  if (!r) { toast('路线数据尚未加载，请先打开工作台'); return false; }
+  openForm(id);
+  return true;
 }
 
 async function deleteRoute(id) {
@@ -1256,6 +1309,17 @@ function openMask(id) { document.getElementById(id).classList.add('open'); }
 function closeMask(id) {
   document.getElementById(id).classList.remove('open');
   if (id === 'formMask') state.editReturnDetail = null;
+}
+/* 路由切换时调用：关闭所有可能打开的弹窗/抽屉。
+ * 否则在详情页打开时点头部入口或浏览器前进/后退，浮层会盖在新页面上
+ * （点击实际落在遮罩上，导致页面看似无响应）。 */
+export function closeAllMasks() {
+  ['formMask', 'detailMask', 'aiChatMask', 'expMask', 'tvMask'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.classList.contains('open')) closeMask(id);
+  });
+  /* 动态插入的抽屉（如足迹省份面板 #fpSheetMask）：隐藏后直接移除 */
+  document.querySelectorAll('.mask.open').forEach(m => m.remove());
 }
 
 export function bindFormEvents() {

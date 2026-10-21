@@ -66,6 +66,8 @@ async function main() {
     let r = await req('POST', '/api/auth/login', { login: 'admin', password: '123456' });
     const adminCookie = r.setCookie;
     check('管理员登录', r.status === 200 && !!adminCookie, r.status);
+    /* 首登强制改密已在服务端强制：先改为测试密码，后续业务请求才不被 403 */
+    await req('POST', '/api/auth/password', { oldPassword: '123456', newPassword: 'adminnew123' }, adminCookie);
     r = await req('POST', '/api/auth/register', { username: 'ledgeruser', password: 'test1234' });
     let userCookie = r.setCookie;
     if (!userCookie) { r = await req('POST', '/api/auth/login', { login: 'ledgeruser', password: 'test1234' }); userCookie = r.setCookie; }

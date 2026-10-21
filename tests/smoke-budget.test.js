@@ -60,6 +60,8 @@ async function main() {
     let r = await req('POST', '/api/auth/login', { login: 'admin', password: '123456' });
     check('admin 登录成功', r.status === 200 && r.json.ok && r.json.data.role === 'admin', r);
     const adminCookie = r.setCookie;
+    /* 首登强制改密已在服务端强制：先改为测试密码，后续业务请求才不被 403 */
+    await req('POST', '/api/auth/password', { oldPassword: '123456', newPassword: 'adminnew123' }, adminCookie);
 
     /* ---------- 预算字段增删改 ---------- */
     section('路线：多币种 + 预算字段');

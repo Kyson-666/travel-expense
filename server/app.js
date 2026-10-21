@@ -12,6 +12,7 @@ const { send, fail, readBody, parseUrl } = require('./http');
 const auth = require('./auth');
 const routesApi = require('./routes_api');
 const adminApi = require('./admin_api');
+const footprintApi = require('./footprint_api');
 const appBundle = require('./app_bundle');
 const appUpdate = require('./app_update');
 
@@ -117,6 +118,22 @@ function sameOrigin(req) {
   return sameHost(referer);
 }
 
+/* 初始密码强制修改：服务端硬门禁
+ * 前端仅做页面跳转（app.js / auth.js），直接调用 API 可完全绕过，故必须在服务端拦截。
+ * 放行范围：
+ *   · /api/auth/*        —— 改密、登出、me（前端据此渲染引导页）、登录/注册/验证码
+ *   · /api/public/*      —— 登录页与应用启动所需的站点信息
+ *   · /api/app/*         —— APP 热更新与应用包下载（启动时尚无登录态）
+ * 其余 /api/* 在 force_reset=1 时统一 403，前端据 code 跳转「设置新密码」。 */
+function passwordResetBlocked(req, url) {
+  if (!url.pathname.startsWith('/api/')) return false;
+  if (url.pathname.startsWith('/api/auth/')) return false;
+  if (url.pathname.startsWith('/api/public/')) return false;
+  if (url.pathname.startsWith('/api/app/')) return false;
+  const u = auth.authFromReq(req);
+  return !!(u && u.force_reset);
+}
+
 const server = http.createServer(async (req, res) => {
   const startMs = Date.now();
   applySecurityHeaders(res);
@@ -138,6 +155,12 @@ const server = http.createServer(async (req, res) => {
   if (!sameOrigin(req)) {
     accessLog(req, res, startMs, 403);
     return fail(res, 403, '跨站请求被拒绝', { code: 'BAD_ORIGIN' });
+  }
+
+  /* 初始密码未修改时，除 auth/public/app 外的 API 一律拒绝（见 passwordResetBlocked 注释） */
+  if (passwordResetBlocked(req, url)) {
+    accessLog(req, res, startMs, 403);
+    return fail(res, 403, '请先修改初始密码后再使用', { code: 'PASSWORD_RESET_REQUIRED' });
   }
 
   /* 公开站点信息（无需登录） */
@@ -275,6 +298,9 @@ const server = http.createServer(async (req, res) => {
       }
       if (url.pathname.startsWith('/api/routes')) {
         return await routesApi.handle(req, res, url, body);
+      }
+      if (url.pathname.startsWith('/api/footprints')) {
+        return await footprintApi.handle(req, res, url, body);
       }
       if (url.pathname.startsWith('/api/admin')) {
         return await adminApi.handle(req, res, url, body);

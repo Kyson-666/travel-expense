@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const config = require('./config');
+const PLACES_DATA = require('./places_data');
 
 /* 9 类支出 */
 const EXP_KEYS = ['交通', '机票', '高铁', '住宿', '餐饮', '门票', '团费', '购物', '其他'];
@@ -175,6 +176,51 @@ CREATE TABLE IF NOT EXISTS route_days (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_route_days_uniq ON route_days(route_id, day_index);
 CREATE INDEX IF NOT EXISTS idx_route_days_route ON route_days(route_id);
+
+/* ---------- 足迹点亮：标准地名字典 + 路线目的地真源 + 点亮流水 ----------
+ * places：随版本分发的字典（tools/build-places.py 离线生成，seedPlaces 幂等 upsert），
+ *   用户不可创建 —— 「标准地名」的保证；
+ * route_places：路线 × 地名（真源，有序多选，上限 20）；routes.dest 退化为物化镜像，
+ *   由 recomputeDestMirror() 在同一事务内回写（与 route_days ↔ scenic/hotel 同构）；
+ * footprint_lit：点亮流水（只增不删）—— 成就与地图的依据，删除路线不回退成就。 */
+CREATE TABLE IF NOT EXISTS places (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  adcode TEXT UNIQUE NOT NULL,
+  country TEXT NOT NULL,
+  province TEXT,
+  city TEXT,
+  name TEXT NOT NULL,
+  pinyin TEXT,
+  abbr TEXT,
+  lng REAL NOT NULL,
+  lat REAL NOT NULL,
+  level TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_places_name ON places(name);
+
+CREATE TABLE IF NOT EXISTS route_places (
+  route_id TEXT NOT NULL,
+  owner_id INTEGER NOT NULL,
+  place_id INTEGER NOT NULL,
+  sort_no INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (route_id, place_id),
+  FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE,
+  FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (place_id) REFERENCES places(id)
+);
+CREATE INDEX IF NOT EXISTS idx_route_places_owner ON route_places(owner_id);
+
+CREATE TABLE IF NOT EXISTS footprint_lit (
+  owner_id INTEGER NOT NULL,
+  place_id INTEGER NOT NULL,
+  first_lit_on TEXT,
+  first_route_id TEXT,
+  source TEXT NOT NULL DEFAULT 'route',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (owner_id, place_id),
+  FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (place_id) REFERENCES places(id)
+);
 `;
 
 let db = null;
@@ -207,6 +253,8 @@ function initDb() {
   addColumn('users', 'last_login', 'INTEGER');
   seedSingleton();
   seedAdmin();
+  seedPlaces();
+  migrateDestToStructured();
   seedRoutes();
   migrateAggregatesToOpening();
   migrateDaysFromScenic();
@@ -256,6 +304,287 @@ function seedRoutes() {
   });
   tx();
 }
+
+/* ============================================================================
+   足迹点亮：地名字典 / 路线目的地真源 / 点亮流水
+   ============================================================================ */
+
+/* 字典幂等 upsert（随版本升级可扩充/修正条目；用户数据只引用 id，字典重建时按 adcode 对齐） */
+function seedPlaces() {
+  const stmt = db.prepare(`INSERT INTO places (adcode, country, province, city, name, pinyin, abbr, lng, lat, level)
+    VALUES (@adcode, @country, @province, @city, @name, @pinyin, @abbr, @lng, @lat, @level)
+    ON CONFLICT(adcode) DO UPDATE SET
+      country=excluded.country, province=excluded.province, city=excluded.city, name=excluded.name,
+      pinyin=excluded.pinyin, abbr=excluded.abbr, lng=excluded.lng, lat=excluded.lat, level=excluded.level`);
+  const tx = db.transaction(() => {
+    for (const p of PLACES_DATA) {
+      stmt.run({ adcode: p.adcode, country: p.country, province: p.province || null, city: p.city || null,
+        name: p.name, pinyin: p.pinyin || '', abbr: p.abbr || '', lng: p.lng, lat: p.lat, level: p.level });
+    }
+  });
+  tx();
+  const n = db.prepare('SELECT COUNT(*) AS c FROM places').get().c;
+  if (n !== PLACES_DATA.length) console.log(`[db] 地名字典已更新：${n} 条`);
+}
+
+/* 存量 dest 一次性清空（已拍板 2026-10-20）：目的地升级为「标准地名多选」，
+ * 旧自由文本不做规则匹配迁移、不保留字段。用 PRAGMA user_version 保证只执行一次；
+ * 之后 dest 恒为 route_places 的物化镜像（recomputeDestMirror 回写）。 */
+function migrateDestToStructured() {
+  const uv = db.pragma('user_version', { simple: true });
+  if (uv >= 1) return 0;
+  const r = db.prepare(`UPDATE routes SET dest = '' WHERE COALESCE(dest, '') <> ''`).run();
+  /* 已有 route_places 的路线（如重复执行/未来字典重建场景）：清空后按真源重算镜像，
+   * 避免把「苏州 · 杭州」这类正常镜像误清为空 */
+  const ids = db.prepare('SELECT DISTINCT route_id FROM route_places').all().map(x => x.route_id);
+  for (const id of ids) recomputeDestMirror(id);
+  db.pragma('user_version = 1');
+  if (r.changes) console.log(`[db] 目的地升级为标准地名：已清空存量自由文本 ${r.changes} 条，请在路线表单重新选择`);
+  return r.changes;
+}
+
+/* 地名解析：refs 元素可为 adcode（"320500"/"JP"）或简名（"苏州"）。
+ * 名字精确匹配时市优先于省、再次国家（「吉林」命中吉林市而非吉林省的歧义以城市为先，
+ * 表单 chip 会显示省份前缀供用户区分）。字典外的名字直接丢弃并记入 misses
+ * （AI 提名 / 旧备份导入的幻觉地名在此被裁决）。 */
+function resolvePlaceRefs(refs) {
+  const out = [];
+  const seen = new Set();
+  const misses = [];
+  const byAdcode = db.prepare('SELECT * FROM places WHERE adcode = ?');
+  const byName = db.prepare(`SELECT * FROM places WHERE name = ?
+    ORDER BY CASE level WHEN 'city' THEN 0 WHEN 'province' THEN 1 ELSE 2 END LIMIT 1`);
+  for (const ref of (Array.isArray(refs) ? refs : []).slice(0, 50)) {
+    const s = String(ref && typeof ref === 'object' ? (ref.adcode || ref.name || '') : (ref == null ? '' : ref)).trim();
+    if (!s) continue;
+    let row = null;
+    if (/^\d{6}$/.test(s) || /^[A-Z]{2}$/.test(s)) row = byAdcode.get(s);
+    if (!row) row = byName.get(s);
+    if (!row) { misses.push(s); continue; }
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+    if (out.length >= 20) break; /* 单路线目的地上限 20 */
+  }
+  return { places: out, misses };
+}
+
+function listRoutePlaces(routeId) {
+  return db.prepare(`SELECT p.id, p.adcode, p.name, p.province, p.country, p.level, p.lng, p.lat, rp.sort_no
+    FROM route_places rp JOIN places p ON p.id = rp.place_id
+    WHERE rp.route_id = ? ORDER BY rp.sort_no ASC`).all(routeId);
+}
+
+/* 批量取多条路线的目的地（列表接口用，避免 N+1） */
+function placesForRoutes(ids) {
+  const out = {};
+  if (!ids || !ids.length) return out;
+  const ph = ids.map(() => '?').join(',');
+  db.prepare(`SELECT rp.route_id, p.id, p.adcode, p.name, p.province, p.country, p.level, p.lng, p.lat, rp.sort_no
+    FROM route_places rp JOIN places p ON p.id = rp.place_id
+    WHERE rp.route_id IN (${ph}) ORDER BY rp.route_id, rp.sort_no ASC`).all(...ids)
+    .forEach(r => { (out[r.route_id] || (out[r.route_id] = [])).push({
+      id: r.id, adcode: r.adcode, name: r.name, province: r.province, country: r.country, level: r.level, sort_no: r.sort_no }); });
+  return out;
+}
+
+/* 由 route_places 生成 routes.dest 物化镜像（「苏州 · 杭州 · 上海」）。
+ * 与 recomputeRouteDays() 回写 scenic/hotel 完全同构：搜索 / CSV / 分享 / AI 全部零改动。 */
+function recomputeDestMirror(routeId) {
+  const dest = listRoutePlaces(routeId).map(p => p.name).join(' · ');
+  db.prepare('UPDATE routes SET dest = ?, updated_at = ? WHERE id = ?').run(dest, Date.now(), routeId);
+  return dest;
+}
+
+/* 覆盖式写入某路线的目的地（refs：adcode 或简名数组），同事务回写 dest 镜像 + 点亮流水。
+ * footprint_lit 只增不删：路线删除后成就保留（已拍板「删除路线不熄灭地图」）。 */
+function setRoutePlaces(routeId, ownerId, refs, opts = {}) {
+  const { places } = resolvePlaceRefs(refs);
+  const prev = listRoutePlaces(routeId).map(p => p.name);
+  const now = Date.now();
+  const startDate = String(opts.startDate || '').slice(0, 10);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM route_places WHERE route_id = ?').run(routeId);
+    const ins = db.prepare('INSERT INTO route_places (route_id, owner_id, place_id, sort_no) VALUES (?,?,?,?)');
+    places.forEach((pl, i) => ins.run(routeId, ownerId, pl.id, i));
+    const lit = db.prepare(`INSERT OR IGNORE INTO footprint_lit
+      (owner_id, place_id, first_lit_on, first_route_id, source, created_at) VALUES (?,?,?,?,?,?)`);
+    for (const pl of places) lit.run(ownerId, pl.id, startDate, routeId, opts.source || 'route', now);
+    recomputeDestMirror(routeId);
+  });
+  tx();
+  if (!opts.silent) {
+    const cur = places.map(p => p.name);
+    const added = cur.filter(n => !prev.includes(n));
+    const removed = prev.filter(n => !cur.includes(n));
+    if (added.length || removed.length) {
+      audit(ownerId, 'update_route_places', 'routes', routeId,
+        ('更新目的地：' + (added.length ? '+' + added.join('、') : '') +
+          (added.length && removed.length ? ' ' : '') + (removed.length ? '−' + removed.join('、') : '')).trim(),
+        opts.ip || null);
+    }
+  }
+  return listRoutePlaces(routeId);
+}
+
+/* 字典搜索：汉字模糊 + 拼音/首字母前缀；市优先、省级次之、国家最后 */
+function searchPlaces(q, limit) {
+  const kw = String(q || '').trim().toLowerCase();
+  if (!kw) return [];
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 15, 1), 50);
+  const like = '%' + kw.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_') + '%';
+  const rows = db.prepare(`SELECT * FROM places
+    WHERE name LIKE ? ESCAPE '\\' OR pinyin LIKE ? ESCAPE '\\' OR abbr LIKE ? ESCAPE '\\' LIMIT 200`)
+    .all(like, like, like);
+  const lvlRank = { city: 0, province: 1, country: 2 };
+  const score = (p) => {
+    const name = p.name.toLowerCase();
+    if (name === kw) return 0;
+    if (p.abbr === kw || p.pinyin === kw) return 1;
+    if (name.startsWith(kw)) return 2;
+    if ((p.pinyin || '').startsWith(kw) || (p.abbr || '').startsWith(kw)) return 3;
+    return 4;
+  };
+  return rows
+    .sort((a, b) => (score(a) - score(b)) || ((lvlRank[a.level] || 9) - (lvlRank[b.level] || 9)) || a.name.localeCompare(b.name, 'zh'))
+    .slice(0, lim)
+    .map(p => ({ id: p.id, adcode: p.adcode, name: p.name, province: p.province, country: p.country,
+      level: p.level, pinyin: p.pinyin, lng: p.lng, lat: p.lat }));
+}
+
+/* 直辖市与港澳：选中即省级点，但统计「城市数」时也计入一城 */
+const MUNI_AS_CITY = new Set(['北京', '上海', '天津', '重庆', '香港', '澳门']);
+
+function litRowsFor(ownerId) {
+  return db.prepare(`SELECT f.place_id, f.first_lit_on, f.first_route_id, f.source, f.created_at,
+      p.adcode, p.name, p.province, p.country, p.level, p.lng, p.lat
+    FROM footprint_lit f JOIN places p ON p.id = f.place_id
+    WHERE f.owner_id = ? ORDER BY f.first_lit_on ASC, f.created_at ASC`).all(ownerId);
+}
+
+/* 成就与汇总（纯计算，唯一口径来源，前端不二次推导） */
+function footprintSummary(ownerId) {
+  const rows = litRowsFor(ownerId);
+  const china = rows.filter(r => r.country === '中国');
+  const provinces = new Set();
+  let cityCount = 0;
+  const cityNames = new Set();
+  for (const r of china) {
+    if (r.level === 'province') { provinces.add(r.name); if (MUNI_AS_CITY.has(r.name)) { cityCount++; cityNames.add(r.name); } }
+    else if (r.level === 'city') { provinces.add(r.province); cityCount++; cityNames.add(r.name); }
+  }
+  const countries = rows.filter(r => r.level === 'country').map(r => ({ name: r.name, first_lit_on: r.first_lit_on || '' }));
+
+  /* 年度回顾：按首次点亮年份分组 */
+  const byYear = {};
+  for (const r of rows) {
+    const y = String(r.first_lit_on || '').slice(0, 4);
+    if (!/^\d{4}$/.test(y)) continue;
+    if (!byYear[y]) byYear[y] = { year: y, cities: [], provinces: new Set(), countries: [] };
+    if (r.level === 'city' || (r.level === 'province' && MUNI_AS_CITY.has(r.name))) byYear[y].cities.push(r.name);
+    if (r.country === '中国') byYear[y].provinces.add(r.level === 'province' ? r.name : r.province);
+    if (r.level === 'country') byYear[y].countries.push(r.name);
+  }
+  const yearly = Object.values(byYear).sort((a, b) => b.year.localeCompare(a.year))
+    .map(y => ({ year: y.year, new_cities: y.cities, new_count: y.cities.length + y.countries.length,
+      provinces: [...y.provinces].sort(), countries: y.countries }));
+  const years = yearly.map(y => y.year);
+
+  /* 首次点亮（有日期的取最早，否则取最早写入） */
+  const dated = rows.filter(r => /^\d{4}/.test(r.first_lit_on || ''));
+  const first = dated[0] || rows[0] || null;
+
+  /* 单年最多 / 连续 N 年 */
+  let maxYearCount = 0;
+  for (const y of yearly) maxYearCount = Math.max(maxYearCount, y.new_count);
+  const yearNums = years.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  let streak = 0, cur = 0, prevY = null;
+  for (const y of yearNums) { cur = (prevY !== null && y === prevY + 1) ? cur + 1 : 1; streak = Math.max(streak, cur); prevY = y; }
+
+  /* 同城二刷：同一城市出现在 ≥2 条现存路线 */
+  const revisit = db.prepare(`SELECT COUNT(*) AS c FROM (
+      SELECT place_id FROM route_places WHERE owner_id = ? GROUP BY place_id HAVING COUNT(DISTINCT route_id) >= 2)`)
+    .get(ownerId).c;
+
+  const pc = provinces.size;
+  const ach = [
+    { key: 'first', title: '迈出第一步', desc: first ? `首次点亮「${first.name}」${/^\d{4}/.test(first.first_lit_on || '') ? '（' + first.first_lit_on.slice(0, 4) + ' 年）' : ''}` : '选择路线的目的地即可点亮', done: rows.length > 0, progress: Math.min(rows.length, 1), target: 1 },
+    { key: 'prov5', title: '小有版图', desc: '点亮 5 个省级行政区', done: pc >= 5, progress: Math.min(pc, 5), target: 5 },
+    { key: 'prov10', title: '半壁江山', desc: '点亮 10 个省级行政区', done: pc >= 10, progress: Math.min(pc, 10), target: 10 },
+    { key: 'prov20', title: '行者无疆', desc: '点亮 20 个省级行政区', done: pc >= 20, progress: Math.min(pc, 20), target: 20 },
+    { key: 'prov34', title: '走遍中国', desc: '点亮全部 34 个省级行政区', done: pc >= 34, progress: Math.min(pc, 34), target: 34 },
+    { key: 'city10', title: '十城记', desc: '点亮 10 座城市', done: cityCount >= 10, progress: Math.min(cityCount, 10), target: 10 },
+    { key: 'city20', title: '二十城志', desc: '点亮 20 座城市', done: cityCount >= 20, progress: Math.min(cityCount, 20), target: 20 },
+    { key: 'city50', title: '五十城传', desc: '点亮 50 座城市', done: cityCount >= 50, progress: Math.min(cityCount, 50), target: 50 },
+    { key: 'year5', title: '丰收之年', desc: '单一年份新增点亮 5 处', done: maxYearCount >= 5, progress: Math.min(maxYearCount, 5), target: 5 },
+    { key: 'streak3', title: '步履不停', desc: '连续 3 年都有新点亮', done: streak >= 3, progress: Math.min(streak, 3), target: 3 },
+    { key: 'revisit', title: '故地重游', desc: '同一座城市出现在 2 条以上路线中', done: revisit > 0, progress: Math.min(revisit, 1), target: 1 },
+    { key: 'abroad', title: '走向世界', desc: '点亮首个境外国家/地区', done: countries.length > 0, progress: Math.min(countries.length, 1), target: 1 }
+  ];
+
+  return {
+    litCount: rows.length,
+    cityCount,
+    provinceCount: pc,
+    countryCount: countries.length,
+    countries,
+    years,
+    yearly,
+    achievements: ach,
+    firstLit: first ? { name: first.name, on: first.first_lit_on || '' } : null
+  };
+}
+
+/* 地图数据：全国省/市中心点 + 点亮状态（点阵地图，不绘制边界线） */
+function footprintMapData(ownerId) {
+  const lit = new Map(litRowsFor(ownerId).map(r => [r.place_id, r]));
+  const points = db.prepare(`SELECT id, adcode, name, province, level, lng, lat FROM places
+    WHERE country = '中国' AND level IN ('province','city') ORDER BY level = 'city', id`).all()
+    .map(p => {
+      const l = lit.get(p.id);
+      /* 省级点：本省任一城市点亮也视为点亮（省级模式口径） */
+      let litByChild = false;
+      if (!l && p.level === 'province') {
+        litByChild = !!db.prepare(`SELECT 1 FROM footprint_lit f JOIN places cp ON cp.id = f.place_id
+          WHERE f.owner_id = ? AND cp.country = '中国' AND cp.level = 'city' AND cp.province = ? LIMIT 1`).get(ownerId, p.name);
+      }
+      return { id: p.id, adcode: p.adcode, name: p.name, province: p.province, level: p.level,
+        lng: p.lng, lat: p.lat, lit: !!l || litByChild, direct: !!l, on: l ? (l.first_lit_on || '') : '' };
+    });
+  const summary = footprintSummary(ownerId);
+  return {
+    points,
+    countries_lit: summary.countries,
+    stats: { cityCount: summary.cityCount, provinceCount: summary.provinceCount,
+      countryCount: summary.countryCount, litCount: summary.litCount }
+  };
+}
+
+/* 待标注路线：本人非示例路线中尚无目的地选择的（引导用户补选标准地名） */
+function pendingRoutes(ownerId) {
+  return db.prepare(`SELECT r.id, r.name, r.year, r.daterange FROM routes r
+    WHERE r.owner_id = ? AND r.is_seed = 0
+      AND NOT EXISTS (SELECT 1 FROM route_places rp WHERE rp.route_id = r.id)
+    ORDER BY r.year DESC, r.created_at DESC LIMIT 100`).all(ownerId);
+}
+
+/* 路线外点亮（出差/路过/探亲）：只增不删，source='manual' */
+function manualLit(ownerId, ref, date, ip) {
+  const { places } = resolvePlaceRefs([ref]);
+  if (!places.length) {
+    const e = new Error('地名不在标准字典中，请从搜索结果中选择'); e.code = 'INVALID_PLACE'; throw e;
+  }
+  const pl = places[0];
+  const on = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : new Date().toISOString().slice(0, 10);
+  const r = db.prepare(`INSERT OR IGNORE INTO footprint_lit
+    (owner_id, place_id, first_lit_on, first_route_id, source, created_at) VALUES (?,?,?,NULL,'manual',?)`)
+    .run(ownerId, pl.id, on, Date.now());
+  const already = r.changes === 0;
+  if (!already) audit(ownerId, 'footprint_manual_lit', 'places', pl.adcode, `手动点亮「${pl.name}」`, ip || null);
+  return { place: { id: pl.id, adcode: pl.adcode, name: pl.name, province: pl.province, country: pl.country, level: pl.level },
+    first_lit_on: on, already };
+}
+
 
 /* 解析日期区间文本 → ISO 起止（兼容 YYYY/M/D—YYYY/M/D、M/D—M/D、单日期） */
 function isoDate(y, mo, d) { return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`; }
@@ -355,7 +684,11 @@ function insertRoute(userId, data, isSeed) {
   /* 按天行程：优先 day_plans 数组，否则把传入 scenic/hotel 视作「未分天」单条 */
   const dayPlans = daysFromInput(data);
   if (dayPlans.length) setRouteDays(p.id, userId, dayPlans);
-  return getRoute(p.id);
+  /* 目的地标准地名：places 数组（adcode 或简名）→ route_places 真源 + dest 镜像 + 点亮流水；
+   * 未携带 places 时仍回写镜像（dest 恒由 route_places 派生，客户端传入的 dest 文本不落库） */
+  if (Array.isArray(data.places)) setRoutePlaces(p.id, userId, data.places, { startDate: p.start_date, silent: !!isSeed });
+  else recomputeDestMirror(p.id);
+  return Object.assign(getRoute(p.id), { places: listRoutePlaces(p.id) });
 }
 
 /* 内部：取原始行（createOpeningExpenses 需要 exp_* 列） */
@@ -392,7 +725,10 @@ function updateRoute(id, userId, data) {
   const dayPlans = (Array.isArray(data.day_plans) || data.scenic !== undefined || data.hotel !== undefined)
     ? daysFromInput(data) : [];
   setRouteDays(id, userId, dayPlans);
-  return getRoute(id);
+  /* 目的地：携带 places 则整体覆盖（PUT 语义）；未携带仅回写镜像，保持 dest 恒为派生值 */
+  if (Array.isArray(data.places)) setRoutePlaces(id, userId, data.places, { startDate: p.start_date });
+  else recomputeDestMirror(id);
+  return Object.assign(getRoute(id), { places: listRoutePlaces(id) });
 }
 
 function getRoute(id) {
@@ -1278,5 +1614,9 @@ module.exports = {
   settle,
   /* 行程按天（景点路线 / 住宿） */
   dayDateLabel, listRouteDays, daysForRoutes, setRouteDays, recomputeRouteDays, migrateDaysFromScenic,
+  /* 足迹点亮：字典 / 目的地真源 / 点亮流水 */
+  seedPlaces, migrateDestToStructured, resolvePlaceRefs, listRoutePlaces, placesForRoutes,
+  recomputeDestMirror, setRoutePlaces, searchPlaces,
+  footprintSummary, footprintMapData, pendingRoutes, manualLit,
   round2
 };

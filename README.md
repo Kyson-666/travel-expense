@@ -18,6 +18,7 @@
 | **多币种** | 每条路线可选币种（CNY/USD/EUR/JPY 等 20+），统计按**站点本位币**自动换算聚合（内置汇率表兜底，可配置实时汇率源）；首页统计卡/图表统一显示本位币 |
 | **预算管控** | 每条路线可设总预算 / 日均预算，卡片显示进度条、超支红色高亮；首页统计卡显示总预算与结余 |
 | **年度复盘** | 按年汇总总花费 / 次数 / 次均 / 总天数；分类占比环形图 + 逐年趋势柱状图（手写 SVG，零外链） |
+| **足迹点亮** | 路线目的地升级为**标准地名多选**（内置 466 条省/市/国家字典，支持汉字 / 拼音 / 首字母搜索，一条路线可选多个）；「我的足迹」一级模块：**点阵点亮地图**（不绘边界线，含台湾省、港澳、南海诸岛附图与钓鱼岛示意点，城市/省级双模式 + 年份筛选）、**12 项成就**、**年度回顾**、**路线外手动点亮**；点亮记录**只增不删**（删除路线不熄灭地图），移动端地图默认收起、列表优先 |
 | **数据导出导入** | 个人 CSV 导出（Excel 可开）/ **JSON 完整备份还原**；JSON 导出含**按天行程 + 同行人 + 逐笔流水（含分摊关系）**，导入可原样还原（含 AA 结算结果）；**导入按「名称 + 年份 + 目的地 + 起止日期」自动去重**（已存在跳过并计入 `duplicates`）；管理员全站 CSV 导出（含用户名，审计留痕）。CSV 仍为 9 类汇总口径（Excel 友好），不含流水明细 |
 | **只读分享** | 本人路线可生成一次性只读链接（`/share/<token>`），无登录可看，**含「AA 结算方案」**（每人实付 / 应负担 / 差额 + 最少转账方案），方便旅行结束后群内对账；随时可重置 / 撤销 |
 | **数据隔离** | 每位用户仅见自己的路线；系统示例（`is_seed=1`）全员可见但普通用户只读 |
@@ -78,6 +79,14 @@
 ---
 
 ## 📌 版本变更记录
+
+### v1.2.0（2026-10-21）
+**「我的足迹」地图交互** + 此前累积的安全/部署修复：
+- **新功能**：路线目的地升级为标准地名多选（内置 466 条省/市/国家字典，汉字/拼音/首字母搜索，一条路线可多选）；新增 `#/footprint` 页签 — 点阵点亮地图（含台湾省、港澳、南海诸岛附图与钓鱼岛示意点，不绘制行政边界线）、12 项成就、年度回顾、路线外手动点亮；删除路线不熄灭地图（点亮只增不删）。移动端 ≤560px 地图默认收起、列表优先。
+- **修复**：路由切换（浏览器前进/后退/头栏链接）时自动关闭已打开的弹窗，避免遮罩盖在新页面拦截点击。
+- **存量兼容**：旧自由文本目的地清空，到「编辑路线」中重新选择标准地名即可点亮。
+- **累计修复**：P1-1 `readBody` 跨分片 UTF-8 乱码；P1-3 服务端首次登录改密门阻（403）；P1-4 安装文档镜像 tag 统一为 v1.1.6；P2-3 `DELETE /api/routes` 需 `confirm`；P2-4 `docker-entrypoint.sh` 信号与退出码修正；P3 `package.json` 版本漂移纠正。
+- **测试**：`smoke-footprint` 47 断言，`verify-footprint-ui` 23 断言，全量 `run-all` 16 脚本 16/16。
 
 ### v1.1.6（2026-10-15）
 **离线体验修复（真机反馈）**——纯 web 层更新，**无需重装 APP**（联网后自动热更新）：
@@ -221,7 +230,7 @@ mkdir -p /volume1/docker/travel
 cd /volume1/docker/travel
 curl -O https://raw.githubusercontent.com/hanyuestar/travel-expense/main/docker-compose.yml
 
-# 2. 启动（自动拉取 ghcr.io/hanyuestar/travel-expense:v1.1.3）
+# 2. 启动（自动拉取 ghcr.io/hanyuestar/travel-expense:v1.1.6）
 docker compose up -d
 
 # 3. 浏览器打开 http://<你的NAS>:8108 ，管理员 admin / 123456（首登强制改密）
@@ -232,7 +241,7 @@ docker compose up -d
 ```yaml
 services:
   travel-expense:
-    image: ghcr.io/hanyuestar/travel-expense:v1.1.3
+    image: ghcr.io/hanyuestar/travel-expense:v1.1.6
     container_name: travel-expense
     restart: unless-stopped
     ports:
@@ -267,7 +276,7 @@ docker run -d --name travel-expense \
   -p 8108:3000 \
   -v /your/path/data:/data \
   --restart unless-stopped \
-  ghcr.io/hanyuestar/travel-expense:v1.1.3
+  ghcr.io/hanyuestar/travel-expense:v1.1.6
 ```
 
 ### 方式 C：手动运行（无 Docker，需 Node 18+）

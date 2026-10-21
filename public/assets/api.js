@@ -142,6 +142,9 @@ export function renderHeader() {
   const u = store.user;
   const box = document.getElementById('userArea');
   if (!box) return;
+  /* 足迹一级入口（登录态显示；移动端与个人中心菜单均有其它入口） */
+  const fpLink = document.getElementById('footprintLink');
+  if (fpLink) fpLink.style.display = u ? 'inline-flex' : 'none';
   if (u) {
     box.classList.remove('hidden');
     const name = u.username || u.email || ('#' + u.id);

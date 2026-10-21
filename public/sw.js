@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = 'travel-expense-shell-v1';
+const VERSION = 'travel-expense-shell-v2';
 const CACHE = `${VERSION}-static`;
 const SHELL = [
   '/',
@@ -12,6 +12,8 @@ const SHELL = [
   '/assets/admin.js',
   '/assets/charts.js',
   '/assets/ledger.js',
+  '/assets/footprint.js',
+  '/assets/places-picker.js',
   '/assets/offline.js',
   '/assets/offline-ui.js',
   '/assets/html2canvas.min.js',
