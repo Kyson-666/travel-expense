@@ -322,14 +322,16 @@ async function renderMapConfig(box) {
           <option value="tencent" ${prov === 'tencent' ? 'selected' : ''}>腾讯地图（GL JS）</option>
         </select></div>
       <div class="field" id="map_amap_rows" style="display:${prov === 'amap' ? '' : 'none'}">
-        <div class="field"><label>高德 Key <span class="hint">${cfg.amap_key ? '已设置，留空/****** 保持不变' : ' lbs.amap.com → 应用管理 → Web端(JS API)'}</span></label>
-          <input id="map_amap_key" placeholder="${cfg.amap_key ? '******' : '在高德开放平台申请的 Web端 Key'}"></div>
+        <div class="field"><label>高德 Key <span class="hint">${cfg.amap_key ? '已设置，留空/****** 保持不变' : ' lbs.amap.com → 应用管理 → 创建 Key，类型务必选「Web端(JS API)」'}</span></label>
+          <input id="map_amap_key" placeholder="${cfg.amap_key ? '******' : '在高德开放平台申请的 Web端(JS API) Key'}"></div>
         <div class="field"><label>高德安全密钥 securityJsCode <span class="hint">${cfg.amap_security ? '已设置，保持不变' : '2021-12 起申请的 Key 必须配套（应用详情 → securityJsCode）'}</span></label>
           <input id="map_amap_security" placeholder="${cfg.amap_security ? '******' : 'securityJsCode'}"></div>
+        <div class="hint">测试连通性走 Web 服务通道：若返回「PLAT_NOMATCH 属预期现象」说明 Key 类型正确（JS API Key），以足迹页实际加载为准；返回 INVALID_USER_KEY 才是 Key 本身错误。</div>
       </div>
       <div class="field" id="map_tencent_rows" style="display:${prov === 'tencent' ? '' : 'none'}">
-        <label>腾讯地图 Key <span class="hint">${cfg.tencent_key ? '已设置，保持不变' : ' lbs.qq.com → 控制台 → 应用管理 → WebServiceAPI/JS'}</span></label>
+        <label>腾讯地图 Key <span class="hint">${cfg.tencent_key ? '已设置，保持不变' : ' lbs.qq.com → 控制台 → 创建 Key，并勾选「WebServiceAPI」产品 + 域名白名单'}</span></label>
         <input id="map_tencent_key" placeholder="${cfg.tencent_key ? '******' : '在腾讯位置服务控制台申请的 Key'}">
+        <div class="hint">测试连通性需该 Key 勾选「WebServiceAPI」；若 Key 启用了域名白名单，服务端测试可能返回「已识别但被白名单拒绝」——属预期，以足迹页实际加载为准。</div>
       </div>
       <div class="auth-actions" style="flex-direction:row">
         <button class="btn btn-line" id="map_test">测试连通性</button>
