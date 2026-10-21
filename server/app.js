@@ -346,12 +346,18 @@ server.listen(config.PORT, () => {
   console.log(`[travel-expense] 多用户后端启动 :${config.PORT}，DB=${path.join(config.DATA_DIR, config.DB_FILE)}`);
 });
 
-/* ---------- 优雅关闭：SIGTERM/SIGINT → 停止接受新连接 → 关闭 DB → 退出 ---------- */
+/* ---------- 优雅关闭：SIGTERM/SIGINT → 关闭空闲连接 → 停止接受新连接 → 关闭 DB → 退出 ---------- */
 let shuttingDown = false;
 function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] 收到 ${signal}，开始优雅关闭...`);
+  /* 主动关闭空闲（keep-alive）连接：Node 18 的 undici fetch 会在连接池中保留
+     keep-alive socket，导致 server.close() 阻塞无法完成，从而在 500ms 内
+     未退出就被新实例误判为「服务已停」。closeIdleConnections 仅断开空闲
+     连接，不中断正在处理的请求。Node 18.2+ 提供该方法。 */
+  if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+  else if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
   server.close(() => {
     try { db.close(); } catch (e) { /* ignore */ }
     console.log('[shutdown] 服务已关闭');

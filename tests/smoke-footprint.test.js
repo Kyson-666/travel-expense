@@ -52,7 +52,15 @@ async function waitUp(srv) {
 }
 async function stop(srv) {
   srv.kill();
-  await new Promise(res => setTimeout(res, 500));
+  /* 等待进程真正退出（而非固定 500ms）：Node 18 下 server.close() 因
+     keep-alive 连接阻塞，旧进程可能在 500ms 后仍未退出，导致新实例
+     EADDRINUSE —— 此时 waitUp 会误连到旧服务器，从而跳过迁移。 */
+  await new Promise((res) => {
+    let done = false;
+    const fallback = setTimeout(() => { if (!done) { done = true; res(); } }, 8000);
+    srv.on('exit', () => { if (!done) { done = true; clearTimeout(fallback); res(); } });
+    srv.on('error', () => { if (!done) { done = true; clearTimeout(fallback); res(); } });
+  });
 }
 
 async function main() {
