@@ -248,20 +248,22 @@ function renderRoutes() {
     const t = totalOf(r);
     const per = perOf(r);
     const seed = r.is_seed ? '<span class="badge b-seed">示例</span>' : '';
+    const collab = r.is_collab ? `<span class="badge b-type" title="由 ${esc(r.owner_name || '其他成员')} 发起 · 可协同记账">家庭协作</span>` : '';
+    const canManage = !r.is_seed && !r.is_collab;
     const nExp = parseInt(r.expense_count, 10) || 0;
     return `<div class="card">
       <div class="card-top"><div><div class="card-name">${esc(r.name)}</div>
         <div class="badges"><span class="badge b-year">${esc(r.year || '')}</span>
         <span class="badge b-type">${esc(r.type || '')}</span>
         ${r.days ? `<span class="badge b-days">${r.days}天</span>` : ''}
-        ${nExp ? `<span class="pill pill-ok">流水 ${nExp} 笔</span>` : ''}${seed}</div></div></div>
-      <div class="card-meta">📅 ${esc(r.daterange || '')}${r.dest ? ' · ' + esc(r.dest) : ''}</div>
+        ${nExp ? `<span class="pill pill-ok">流水 ${nExp} 笔</span>` : ''}${seed}${collab}</div></div></div>
+      <div class="card-meta">📅 ${esc(r.daterange || '')}${r.dest ? ' · ' + esc(r.dest) : ''}${r.is_collab ? ' · 由 ' + esc(r.owner_name || '') + ' 发起' : ''}</div>
       <div class="card-total"><span class="amt">${fmtMoney(t, r.currency)}</span>${per != null ? `<span class="per">人均 ${fmtMoney(per, r.currency)}</span>` : ''}</div>
       ${miniBar(r)}
       ${budgetBar(r)}
       <div class="card-actions">
         <button class="btn btn-sm" data-act="detail" data-id="${r.id}">查看</button>
-        ${r.is_seed && store.user && store.user.role !== 'admin' ? '' : `<button class="btn btn-sm" data-act="edit" data-id="${r.id}">编辑</button>`}
+        ${canManage ? `<button class="btn btn-sm" data-act="edit" data-id="${r.id}">编辑</button>` : ''}
         ${r.is_seed && store.user && store.user.role !== 'admin' ? '' : `<button class="btn btn-sm btn-line" data-act="add" data-id="${r.id}">＋ 记一笔</button>`}
       </div>
     </div>`;
@@ -1160,13 +1162,15 @@ function renderDetailTab() {
   const acts = document.getElementById('d_actions');
   if (!r || !body) return;
 
-  /* 底部操作区随页签切换 */
+  /* 底部操作区随页签切换
+   * 协作路线：协作者不可编辑路线本体（仅可记账）；owner 正常 */
   const seedOnly = r.is_seed && store.user && store.user.role !== 'admin';
+  const noEdit = seedOnly || r.is_collab;
   if (state.detailTab === 'overview') {
     acts.innerHTML = `<button class="btn" id="d_edit">编辑</button><button class="btn btn-primary" data-close="detailMask">关闭</button>`;
     const eb = document.getElementById('d_edit');
     if (eb) {
-      eb.style.display = seedOnly ? 'none' : '';
+      eb.style.display = noEdit ? 'none' : '';
       /* 先关详情再开编辑（否则编辑弹窗被详情盖住）；保存成功后回到该路线的概览 */
       eb.onclick = () => { closeMask('detailMask'); openForm(r.id); state.editReturnDetail = r.id; };
     }
@@ -1226,8 +1230,100 @@ function renderOverview(r, body, seedOnly) {
   const g = document.getElementById('d_gotoLedger');
   if (g) g.onclick = () => { state.detailTab = 'ledger'; paintDetailTabs(); renderDetailTab(); };
 
-  /* 分享入口：仅本人路线或管理员（示例对普通用户只读，不展示） */
-  if (!seedOnly) {
+  /* 家庭协作行：发起人/成员可见；owner 可打开协作管理弹层。
+   * 列表行无 is_owner/collaborators 字段 → 用「非协作非示例」推断 owner；成员名细看管理弹层。
+   * 示例路线也展示提示行，避免「找不到邀请入口」的困惑（示例为系统数据，不支持协作）。 */
+  const isOwnerRow = !seedOnly && !r.is_collab;
+  if (seedOnly) {
+    const cb = document.createElement('div');
+    cb.className = 'detail-row';
+    cb.style.marginTop = '10px';
+    cb.innerHTML = '<span class="k">家庭协作</span><span class="v" style="font-size:12.5px;color:var(--muted)">示例路线为系统数据，不支持协作 —— 新建一条路线即可邀请家人共同记账</span>';
+    body.appendChild(cb);
+  } else if (r.is_collab || isOwnerRow) {
+    const cb = document.createElement('div');
+    cb.className = 'detail-row';
+    cb.style.marginTop = '10px';
+    const names = (r.collaborators || []).map(c => c.username).join('、');
+    cb.innerHTML = '<span class="k">家庭协作</span><span class="v" style="font-size:12.5px">' +
+      (isOwnerRow
+        ? (names ? '已邀请 ' + esc(names) + ' ' : '')
+        : '由 ' + esc(r.owner_name || '') + ' 发起' + (names ? ' · 成员：' + esc(names) : '')) +
+      (isOwnerRow ? '<button class="btn btn-sm" id="collabMgrBtn" style="margin-left:6px">邀请成员记账</button>' : '') +
+      '</span>';
+    body.appendChild(cb);
+    const mgr = cb.querySelector('#collabMgrBtn');
+    if (mgr) mgr.onclick = () => openCollabSheet(r);
+  }
+
+  /* 分享入口：仅本人路线（owner）；示例/协作路线不展示（分享属路线本体管理） */
+  if (!seedOnly && !r.is_collab) appendShareRow(r, body);
+}
+/* ---------- 家庭协作名单管理（owner 专属弹层） ---------- */
+async function openCollabSheet(r) {
+  openMask('collabMask');
+  const body = document.getElementById('collabBody');
+  body.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const data = await api.get('/routes/' + encodeURIComponent(r.id) + '/collaborators');
+    const list = data.list || [];
+    const max = data.max || 8;
+    let h = '';
+    h += '<div class="hint" style="margin:0 0 10px">邀请同服务器的用户为「同行记账员」：可共同记流水与同行人，不能修改路线本身。上限 ' + max + ' 人。</div>';
+    h += '<div class="detail-row"><span class="k">' + esc((store.user && store.user.username) || '我') + '</span><span class="v"><span class="badge b-type">发起人</span></span></div>';
+    h += list.map(c => `<div class="detail-row"><span class="k">${esc(c.username)}</span>
+      <span class="v"><button class="btn btn-sm btn-danger" data-del="${c.user_id}" data-name="${esc(c.username)}">移除</button></span></div>`).join('');
+    if (list.length >= max) h += '<div class="banner">协作成员已满（' + max + ' 人）。移除成员后才能继续邀请。</div>';
+    else {
+      h += '<div class="field" style="margin-top:12px"><label>邀请新成员 <span class="hint">按用户名或邮箱搜索站内用户</span></label>';
+      h += '<input id="collabQ" placeholder="输入用户名搜索" autocomplete="off"><div id="collabCands" style="margin-top:8px"></div></div>';
+    }
+    body.innerHTML = h;
+    body.querySelectorAll('[data-del]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('移除「' + b.dataset.name + '」的协作权限？其已记录的流水会保留。')) return;
+        try {
+          await api.del('/routes/' + encodeURIComponent(r.id) + '/collaborators/' + b.dataset.del);
+          toast('已移除');
+          openCollabSheet(r); reloadAfterMutation();
+        } catch (e) { toast('移除失败：' + e.message); }
+      };
+    });
+    const q = body.querySelector('#collabQ');
+    const box = body.querySelector('#collabCands');
+    if (q && box) {
+      let timer = null;
+      q.addEventListener('input', () => {
+        clearTimeout(timer);
+        const kw = q.value.trim();
+        if (!kw) { box.innerHTML = ''; return; }
+        timer = setTimeout(async () => {
+          try {
+            const res = await api.get('/routes/' + encodeURIComponent(r.id) + '/collab-candidates?q=' + encodeURIComponent(kw));
+            const cands = (res && res.list) || [];
+            box.innerHTML = cands.length
+              ? cands.map(c => `<button class="btn btn-sm btn-line" style="margin:0 6px 6px 0" data-uid="${c.id}" data-uname="${esc(c.username)}">＋ ${esc(c.username)}</button>`).join('')
+              : '<span style="font-size:12px;color:var(--muted)">未找到可邀请的用户</span>';
+            box.querySelectorAll('[data-uid]').forEach(btn => {
+              btn.onclick = async () => {
+                try {
+                  await api.post('/routes/' + encodeURIComponent(r.id) + '/collaborators', { user_id: parseInt(btn.dataset.uid, 10) });
+                  toast('已邀请 ' + btn.dataset.uname);
+                  openCollabSheet(r); reloadAfterMutation();
+                } catch (e) { toast('邀请失败：' + e.message); }
+              };
+            });
+          } catch (e) { box.innerHTML = '<span style="font-size:12px;color:var(--danger)">搜索失败：' + esc(e.message) + '</span>'; }
+        }, 220);
+      });
+    }
+  } catch (e) {
+    body.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+/* 分享入口行（renderOverview 辅助）：生成只读链接并支持点击复制 */
+function appendShareRow(r, body) {
     const sb = document.createElement('div');
     sb.className = 'detail-row';
     sb.style.marginTop = '10px';
@@ -1250,7 +1346,6 @@ function renderOverview(r, body, seedOnly) {
         toast('已生成分享链接，点击链接复制');
       } catch (e) { toast('分享失败：' + e.message); }
     };
-  }
 }
 function row(k, v) { return `<div class="detail-row"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`; }
 function detailExp(c, v, t, cur) {

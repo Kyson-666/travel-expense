@@ -27,11 +27,14 @@ const CSV_HEAD = ['name', 'year', 'type', 'daterange', 'start_date', 'end_date',
 /* 查询本人+种子（含个人隐藏开关过滤种子）；返回全量行（统计用）。
  * 排序权威在服务端：按出发时间倒序（routeStartMs）。前端不得再对分页结果二次排序，
  * 否则会出现「页内按出发日排、页间按年+创建时间切」的跨页顺序错乱。
- * Array.prototype.sort 稳定 → 同出发时间沿用 SQL 的 year DESC, created_at DESC 次序。 */
-function queryRoutes(userId, { year, q, hideSeed }) {
+ * Array.prototype.sort 稳定 → 同出发时间沿用 SQL 的 year DESC, created_at DESC 次序。
+ * includeCollab：合并「我被邀请协作」的路线（列表/年份用）；统计与导出保持纯本人口径
+ * （excludeCollab 语义），避免家庭账在多个成员的统计里被双算。 */
+function queryRoutes(userId, { year, q, hideSeed, includeCollab }) {
   const args = [userId];
   let where = `(owner_id = ?`;
   if (!hideSeed) where += ` OR is_seed = 1`;
+  if (includeCollab) where += ` OR id IN (SELECT route_id FROM route_collaborators WHERE user_id = ?)`, args.push(userId);
   where += `)`;
   /* 隐藏系统示例：排除所有 is_seed=1 的示例路线（与所有者无关，
    * 否则种子路线归 admin 所有时，管理员勾选「隐藏系统示例」无效） */
@@ -47,7 +50,7 @@ function queryRoutes(userId, { year, q, hideSeed }) {
 
 /* 列表（分页）：返回 {rows, total, page, pageSize} */
 function listForUser(userId, { year, q, hideSeed, page, pageSize }) {
-  const rows = queryRoutes(userId, { year, q, hideSeed });
+  const rows = queryRoutes(userId, { year, q, hideSeed, includeCollab: true });
   const total = rows.length;
   const lim = Math.min(200, Math.max(1, parseInt(pageSize) || 50));
   const pg = Math.max(1, parseInt(page) || 1);
@@ -55,9 +58,12 @@ function listForUser(userId, { year, q, hideSeed, page, pageSize }) {
   return { rows: slice, total, page: pg, pageSize: lim };
 }
 
+/* 可见性：本人 + 种子 + 协作路线（协作者对详情/流水只读或记账） */
 function findVisible(id, userId) {
-  return db().prepare(`SELECT ${ROUTE_COLS} FROM routes WHERE id = ? AND (owner_id = ? OR is_seed = 1)`)
-    .get(id, userId) || null;
+  return db().prepare(`SELECT ${ROUTE_COLS} FROM routes
+    WHERE id = ? AND (owner_id = ? OR is_seed = 1
+      OR id IN (SELECT route_id FROM route_collaborators WHERE user_id = ?))`)
+    .get(id, userId, userId) || null;
 }
 
 /* 批量取各路线的流水笔数（列表卡片徽标用） */
@@ -79,12 +85,15 @@ function travelerCounts(ids) {
   return out;
 }
 
-/* 全量去重年份（不受 year 过滤，确保年份胶囊完整）；hideSeed 时排除种子路线年份 */
+/* 全量去重年份（不受 year 过滤，确保年份胶囊完整）；hideSeed 时排除种子路线年份。
+ * 与列表同源：含协作路线（否则协作者看到的路线无法按年份筛选）。 */
 function routesYears(res, userId, query) {
   const hideSeed = query.hideSeed === '1';
   const args = [userId];
   let where = `(owner_id = ?`;
   if (!hideSeed) where += ` OR is_seed = 1`;
+  where += ` OR id IN (SELECT route_id FROM route_collaborators WHERE user_id = ?)`;
+  args.push(userId);
   where += `)`;
   if (hideSeed) where += ` AND is_seed = 0`;
   const rows = db().prepare(`SELECT DISTINCT year FROM routes WHERE ${where} AND year IS NOT NULL AND year != ''`).all(...args);
@@ -185,18 +194,22 @@ async function handle(req, res, url, body) {
       page: query.page,
       pageSize: query.pageSize
     });
-    /* 附上流水笔数（列表卡片徽标用），一次分组查询避免 N+1 */
+    /* 附上流水笔数（列表卡片徽标用），一次分组查询避免 N+1；
+     * 协作路线附 is_collab 标记与发起人用户名（批量查询避免 N+1） */
     const ids = rows.map(r => r.id);
     const counts = expenseCounts(ids);
     const tcounts = travelerCounts(ids);
     const daysMap = dbModule.daysForRoutes(ids);
     const placesMap = dbModule.placesForRoutes(ids);
+    const ownerNames = dbModule.userNames(rows.filter(r => r.owner_id !== user.id).map(r => r.owner_id));
     return ok(res, {
       list: rows.map(r => Object.assign(dbModule.routeToJson(r), {
         expense_count: counts[r.id] || 0,
         traveler_count: tcounts[r.id] || 0,
         day_plans: daysMap[r.id] || [],
-        places: placesMap[r.id] || []
+        places: placesMap[r.id] || [],
+        is_collab: r.owner_id !== user.id && !r.is_seed,
+        owner_name: r.owner_id !== user.id ? (ownerNames[r.owner_id] || '') : ''
       })),
       total, page, pageSize
     });
@@ -361,7 +374,8 @@ async function handle(req, res, url, body) {
       if (row && row.is_seed && user.role !== 'admin') {
         return fail(res, 403, '示例路线为系统数据，仅可查看', { code: 'FORBIDDEN' });
       }
-      const canWrite = row && (row.owner_id === user.id || user.role === 'admin');
+      const canWrite = row && (row.owner_id === user.id || user.role === 'admin'
+        || (!row.is_seed && dbModule.isCollaborator(id, user.id)));
       if (!canWrite) {
         const ops = body && Array.isArray(body.ops) ? body.ops : [];
         if (ops.length > 200) return fail(res, 400, '单次最多同步 200 笔', { code: 'OPS_TOO_MANY' });
@@ -375,11 +389,15 @@ async function handle(req, res, url, body) {
     const row = findVisible(id, user.id);
     if (!row) return fail(res, 404, '路线不存在');
 
-    /* 示例路线对普通用户只读；管理员可管理种子 */
+    /* 示例路线对普通用户只读；管理员可管理种子
+     * 家庭协作（v1.3）：协作者可读写流水与同行人、查看结算；
+     * 路线本体（PUT/DELETE）、分享、协作者管理仍仅 owner。 */
     const isOwn = row.owner_id === user.id || user.role === 'admin';
+    const isCollab = !row.is_seed && row.owner_id !== user.id && dbModule.isCollaborator(id, user.id);
+    const canLedger = isOwn || isCollab;
     const seedReadonly = row.is_seed && user.role !== 'admin';
 
-    /* ---------- 分享令牌管理：仅本人或管理员 ---------- */
+    /* ---------- 分享令牌管理：仅本人或管理员（协作者不可） ---------- */
     if (sub === 'share') {
       if (method === 'GET') {
         if (!isOwn) return fail(res, 403, '无权查看该路线的分享', { code: 'FORBIDDEN' });
@@ -399,14 +417,53 @@ async function handle(req, res, url, body) {
       return fail(res, 404, '接口不存在');
     }
 
+    /* ---------- 家庭协作：名单管理（owner）/ 查看（成员）---------- */
+    if (sub === 'collaborators') {
+      if (method === 'GET' && !subId) {
+        if (!isOwn && !isCollab) return fail(res, 403, '无权查看该路线的协作名单', { code: 'FORBIDDEN' });
+        return ok(res, { list: dbModule.listCollaborators(id), max: dbModule.MAX_COLLABORATORS, is_owner: row.owner_id === user.id });
+      }
+      if (method === 'POST' && !subId) {
+        if (!isOwn) return fail(res, 403, '仅路线所有者可添加协作者', { code: 'FORBIDDEN' });
+        const uidToAdd = parseInt(body && body.user_id, 10);
+        if (!uidToAdd) return fail(res, 400, '请选择要邀请的用户');
+        try {
+          const r = dbModule.addCollaborator(id, row.owner_id, uidToAdd, user.id, req.socket.remoteAddress || '');
+          return created(res, Object.assign(r, { list: dbModule.listCollaborators(id) }));
+        } catch (e) {
+          if (e.code && e.code !== 'ROUTE_NOT_FOUND') return fail(res, e.code === 'TOO_MANY' ? 400 : 400, e.message, { code: e.code });
+          throw e;
+        }
+      }
+      if (method === 'DELETE' && subId) {
+        if (!isOwn) return fail(res, 403, '仅路线所有者可移除协作者', { code: 'FORBIDDEN' });
+        const uidToDel = parseInt(subId, 10);
+        if (!uidToDel) return fail(res, 400, '参数不正确');
+        try {
+          const r = dbModule.removeCollaborator(id, row.owner_id, uidToDel, user.id, req.socket.remoteAddress || '');
+          return ok(res, Object.assign(r, { list: dbModule.listCollaborators(id) }));
+        } catch (e) {
+          if (e.code && e.code !== 'ROUTE_NOT_FOUND') return fail(res, e.code === 'NOT_IN_LIST' ? 404 : 400, e.message, { code: e.code });
+          throw e;
+        }
+      }
+      return fail(res, 404, '接口不存在');
+    }
+
+    /* ---------- 协作候选人搜索：仅 owner ---------- */
+    if (sub === 'collab-candidates' && method === 'GET') {
+      if (!isOwn) return fail(res, 403, '仅路线所有者可添加协作者', { code: 'FORBIDDEN' });
+      return ok(res, { list: dbModule.collabCandidates(id, row.owner_id, query.q || '') });
+    }
+
     /* ---------- 逐笔消费流水 + AA 分账 ----------
-     * 读操作：与路线同样的可见性（本人 + 示例对全员可见）
-     * 写操作：示例路线只读（普通用户）+ 非本人 403，与路线 CRUD 保持一致 */
+     * 读操作：与路线同样的可见性（本人 + 协作者 + 示例对全员可见）
+     * 写操作：示例路线只读（普通用户）+ 本人或协作者；路线本体修改仍仅 owner */
     if (sub === 'travelers' || sub === 'expenses' || sub === 'settle') {
       if (method !== 'GET' && seedReadonly) {
         return fail(res, 403, '示例路线为系统数据，仅可查看', { code: 'FORBIDDEN' });
       }
-      if (method !== 'GET' && !isOwn) {
+      if (method !== 'GET' && !canLedger) {
         return fail(res, 403, '无权修改该路线的流水', { code: 'FORBIDDEN' });
       }
       const ip = req.socket.remoteAddress || '';
@@ -508,9 +565,15 @@ async function handle(req, res, url, body) {
     if (sub) return fail(res, 404, '接口不存在');
 
     if (method === 'GET') {
+      /* 详情附协作信息：协作者/发起人据此渲染「家庭协作」标识与权限（卡片名等最小字段） */
+      const collab = dbModule.listCollaborators(id);
       return ok(res, Object.assign(dbModule.routeToJson(row), {
         day_plans: dbModule.listRouteDays(id),
-        places: dbModule.listRoutePlaces(id)
+        places: dbModule.listRoutePlaces(id),
+        is_collab: isCollab,
+        is_owner: row.owner_id === user.id,
+        owner_name: row.owner_id !== user.id ? (dbModule.userNames([row.owner_id])[row.owner_id] || '') : '',
+        collaborators: collab
       }));
     }
 

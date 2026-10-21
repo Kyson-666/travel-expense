@@ -8,6 +8,8 @@
 <link rel="stylesheet" href="/styles.css">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#15a98c">
+<!-- 年报长图导出（与分享页同一份库；主应用 CSP script-src 'self' 允许同源脚本） -->
+<script src="/assets/html2canvas.min.js" defer></script>
 </head>
 <body>
 <header>
@@ -76,10 +78,10 @@
       </div>
       <div class="field"><label>天数 <span class="hint">自动计算</span></label><input id="f_days" placeholder="自动" readonly style="background:#f5f7f6;cursor:not-allowed"></div>
       <div class="field"><label>同行人数 <span class="hint">用于算人均</span></label><input id="f_people" placeholder="2" inputmode="numeric"></div>
-      <div class="field"><label>币种 <span class="hint">改后该路线流水币种同步更新</span></label><select id="f_currency"></select></div>
+      <div class="field"><label>币种</label><select id="f_currency"></select></div>
       <div class="field"><label>总预算 <span class="hint">本位币近似</span></label><input id="f_budget_total" placeholder="0" inputmode="decimal"></div>
       <div class="field"><label>日均预算</label><input id="f_budget_daily" placeholder="0" inputmode="decimal"></div>
-      <div class="field"><label>目的地 <span class="hint">最多选择 20 个地名</span></label>
+      <div class="field" style="grid-column:1/-1"><label>目的地 <span class="hint">最多选择 20 个地名</span></label>
         <div id="f_destPicker"></div>
         <input type="hidden" id="f_dest">
       </div>
@@ -128,6 +130,15 @@
     <div class="tabs" id="d_tabs"></div>
     <div id="d_body"></div>
     <div class="sheet-actions" id="d_actions"></div>
+  </div>
+</div>
+
+<!-- 家庭协作名单管理（路线 owner） -->
+<div class="mask" id="collabMask">
+  <div class="sheet">
+    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>家庭协作</span><button class="close-x" data-close="collabMask">×</button></h2>
+    <div id="collabBody"></div>
+    <div class="sheet-actions"><button class="btn" data-close="collabMask">关闭</button></div>
   </div>
 </div>
 

@@ -19,14 +19,50 @@ async function handle(req, res, url, body) {
     return ok(res, { list: dbModule.searchPlaces(query.q, query.limit) });
   }
 
-  /* GET /map — 点阵地图数据：全国省/市中心点 + 点亮状态 + 统计 */
+  /* GET /map — 点阵地图数据：全国省/市中心点 + 点亮状态 + 统计
+   * 缓存协议：客户端携带 ?ver=<上次版本戳>，版本未变时仅返回 { notModified: true }（省流量、秒开） */
   if (rest === '/map' && method === 'GET') {
-    return ok(res, dbModule.footprintMapData(user.id));
+    const ver = dbModule.footprintMapVer(user.id);
+    if (query.ver && query.ver === ver) {
+      return ok(res, { notModified: true, ver });
+    }
+    const data = dbModule.footprintMapData(user.id);
+    return ok(res, Object.assign(data, { ver }));
+  }
+
+  /* GET /map-config — 足迹页底图增强配置（登录用户；管理员在后台开启后才下发 key）
+   * JS key 属浏览器公开值（配合图商域名白名单保护）；高德需同时下发 securityJsCode */
+  if (rest === '/map-config' && method === 'GET') {
+    const c = dbModule.getMapConfig();
+    const provider = c.provider || 'none';
+    if (provider === 'none') return ok(res, { enabled: false, provider: 'none' });
+    return ok(res, {
+      enabled: true, provider,
+      amap_key: provider === 'amap' ? (c.amap_key || '') : '',
+      amap_security: provider === 'amap' ? (c.amap_security || '') : '',
+      tencent_key: provider === 'tencent' ? (c.tencent_key || '') : ''
+    });
   }
 
   /* GET /summary — 计数 / 年度回顾 / 成就（服务端唯一口径） */
   if (rest === '/summary' && method === 'GET') {
     return ok(res, dbModule.footprintSummary(user.id));
+  }
+
+  /* GET /recap?year=YYYY — 年度旅行报告（点亮 × 花费 × 成就，长图数据源）
+   * 不带 year 时仅返回可选年份列表（供前端渲染年份胶囊） */
+  if (rest === '/recap' && method === 'GET') {
+    if (!query.year) {
+      const s = dbModule.footprintSummary(user.id);
+      const routeYears = dbModule.footprintRecapYears(user.id);
+      return ok(res, { available_years: [...new Set([...(s.years || []), ...routeYears])].sort((a, b) => b.localeCompare(a)) });
+    }
+    try {
+      return ok(res, dbModule.footprintRecap(user.id, query.year));
+    } catch (e) {
+      if (e && e.code === 'INVALID_YEAR') return fail(res, 400, e.message, { code: e.code });
+      throw e;
+    }
   }
 
   /* GET /pending — 待标注路线（无目的地选择的本人路线，引导补选） */

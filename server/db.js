@@ -221,6 +221,41 @@ CREATE TABLE IF NOT EXISTS footprint_lit (
   FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (place_id) REFERENCES places(id)
 );
+
+/* ---------- 路线级家庭协作（v1.3）----------
+ * 白名单共享：路线 owner 邀请同服务器用户为「同行记账员」，可记流水/同行人，不可改路线本体。
+ * 权限模型（唯一来源，routes_api 据此分流）：
+ *   owner      —— 全权（路线 CRUD / 分享 / 协作者管理）
+ *   collaborator —— 流水与同行人读写、结算查看；路线本体只读
+ * 流水归属不变：expenses.owner_id 恒为路线 owner（协作者代记的流水归路线账本），
+ * 实际操作人由 audit_logs 记录；统计 / 导出 / 年报均只算本人 owner 的路线（避免家庭账双算）。
+ * CREATE TABLE IF NOT EXISTS 幂等，存量库升级零迁移。 */
+CREATE TABLE IF NOT EXISTS route_collaborators (
+  route_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  invited_by INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (route_id, user_id),
+  FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_collab_user ON route_collaborators(user_id);
+
+/* ---------- 足迹地图底图配置（v1.3）----------
+ * 管理员可选接入合规图商（高德/腾讯）增强足迹地图显示；默认关闭（provider=none）。
+ * 关闭时足迹页维持自绘点阵示意（不含行政边界线，合规风险最低）。
+ * JS API key 属浏览器公开值（配合图商域名白名单保护），经登录接口下发；
+ * 高德 2021-12+ 需同时配置 securityJsCode（安全密钥）才能正常加载。 */
+CREATE TABLE IF NOT EXISTS map_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  provider TEXT NOT NULL DEFAULT 'none',
+  amap_key TEXT,
+  amap_security TEXT,
+  tencent_key TEXT,
+  updated_at INTEGER,
+  updated_by INTEGER
+);
 `;
 
 let db = null;
@@ -274,6 +309,7 @@ function seedSingleton() {
   db.prepare('INSERT OR IGNORE INTO email_config (id) VALUES (1)').run();
   db.prepare('INSERT OR IGNORE INTO site_settings (id) VALUES (1)').run();
   db.prepare('INSERT OR IGNORE INTO ai_config (id) VALUES (1)').run();
+  db.prepare(`INSERT OR IGNORE INTO map_config (id, provider) VALUES (1, 'none')`).run();
 }
 
 function seedAdmin() {
@@ -750,6 +786,181 @@ function clearShareToken(id) {
 function findRouteByShareToken(token) {
   const row = db.prepare(`SELECT ${ROUTE_COLS} FROM routes WHERE share_token = ?`).get(token);
   return row ? routeToJson(row) : null;
+}
+
+/* ---------- 足迹地图底图配置 ---------- */
+const MAP_PROVIDERS = new Set(['none', 'amap', 'tencent']);
+
+function getMapConfig() {
+  return db.prepare('SELECT * FROM map_config WHERE id = 1').get() || { provider: 'none' };
+}
+
+/* 保存地图配置；provider 必须在白名单内。key 传 '******' 表示保持原值（与邮件密码同模式）。 */
+function saveMapConfig(data, adminId) {
+  const provider = MAP_PROVIDERS.has(data.provider) ? data.provider : 'none';
+  const prev = getMapConfig();
+  const keep = (v, old) => (v === '******' || v === undefined || v === null) ? old : String(v).trim();
+  db.prepare(`UPDATE map_config SET provider=@provider, amap_key=@amap_key, amap_security=@amap_security,
+    tencent_key=@tencent_key, updated_at=@updated_at, updated_by=@updated_by WHERE id = 1`)
+    .run({
+      provider,
+      amap_key: keep(data.amap_key, prev.amap_key || ''),
+      amap_security: keep(data.amap_security, prev.amap_security || ''),
+      tencent_key: keep(data.tencent_key, prev.tencent_key || ''),
+      updated_at: Date.now(), updated_by: adminId
+    });
+}
+
+/* 足迹地图数据版本戳：点亮流水只增不删，max(created_at) 即充分的乐观版本。
+ * 客户端带 ?ver= 相同 → 服务端返回 notModified，省流量并让缓存秒开。 */
+function footprintMapVer(ownerId) {
+  const r = db.prepare('SELECT COALESCE(MAX(created_at), 0) AS v, COUNT(*) AS c FROM footprint_lit WHERE owner_id = ?').get(ownerId);
+  return r.v + ':' + r.c;
+}
+
+/* ---------- 路线级家庭协作（白名单共享） ---------- */
+const MAX_COLLABORATORS = 8;
+
+function isCollaborator(routeId, userId) {
+  return !!db.prepare('SELECT 1 FROM route_collaborators WHERE route_id = ? AND user_id = ?').get(routeId, userId);
+}
+
+function listCollaborators(routeId) {
+  return db.prepare(`SELECT c.user_id, u.username, c.created_at AS joined_at
+    FROM route_collaborators c JOIN users u ON u.id = c.user_id
+    WHERE c.route_id = ? ORDER BY c.created_at ASC`).all(routeId);
+}
+
+/* 邀请协作者：owner 专属动作；种子路线 / 本人 / 重复 / 上限 / 目标用户有效性在此裁决 */
+function addCollaborator(routeId, ownerId, targetUserId, actorId, ip) {
+  const route = db.prepare('SELECT id, owner_id, is_seed FROM routes WHERE id = ?').get(routeId);
+  if (!route) { const e = new Error('路线不存在'); e.code = 'ROUTE_NOT_FOUND'; throw e; }
+  if (route.is_seed) { const e = new Error('示例路线为系统数据，不能添加协作者'); e.code = 'SEED_ROUTE'; throw e; }
+  if (route.owner_id !== ownerId) { const e = new Error('仅路线所有者可管理协作者'); e.code = 'FORBIDDEN'; throw e; }
+  const target = db.prepare(`SELECT id, username, status FROM users WHERE id = ?`).get(targetUserId);
+  if (!target) { const e = new Error('用户不存在'); e.code = 'USER_NOT_FOUND'; throw e; }
+  if (target.status !== 'active') { const e = new Error('该账号已被封禁，无法邀请'); e.code = 'USER_BANNED'; throw e; }
+  if (target.id === route.owner_id) { const e = new Error('不能邀请路线所有者本人'); e.code = 'IS_OWNER'; throw e; }
+  if (isCollaborator(routeId, targetUserId)) { const e = new Error('该用户已在协作名单中'); e.code = 'ALREADY_IN'; throw e; }
+  const n = db.prepare('SELECT COUNT(*) AS c FROM route_collaborators WHERE route_id = ?').get(routeId).c;
+  if (n >= MAX_COLLABORATORS) { const e = new Error(`协作成员最多 ${MAX_COLLABORATORS} 人`); e.code = 'TOO_MANY'; throw e; }
+  db.prepare('INSERT INTO route_collaborators (route_id, user_id, invited_by, created_at) VALUES (?,?,?,?)')
+    .run(routeId, targetUserId, actorId || ownerId, Date.now());
+  audit(actorId || ownerId, 'add_collaborator', 'routes', routeId, `邀请「${target.username}」协作记账`, ip || null);
+  return { user_id: target.id, username: target.username };
+}
+
+function removeCollaborator(routeId, ownerId, targetUserId, actorId, ip) {
+  const route = db.prepare('SELECT id, owner_id, is_seed FROM routes WHERE id = ?').get(routeId);
+  if (!route) { const e = new Error('路线不存在'); e.code = 'ROUTE_NOT_FOUND'; throw e; }
+  if (route.owner_id !== ownerId) { const e = new Error('仅路线所有者可管理协作者'); e.code = 'FORBIDDEN'; throw e; }
+  const r = db.prepare('DELETE FROM route_collaborators WHERE route_id = ? AND user_id = ?').run(routeId, targetUserId);
+  if (!r.changes) { const e = new Error('该用户不在协作名单中'); e.code = 'NOT_IN_LIST'; throw e; }
+  const u = db.prepare('SELECT username FROM users WHERE id = ?').get(targetUserId);
+  audit(actorId || ownerId, 'remove_collaborator', 'routes', routeId, `移除协作者「${u ? u.username : targetUserId}」`, ip || null);
+  return { removed: 1 };
+}
+
+/* 协作者可见的路线 id 集合（列表 / 年份 / 可见性判断用） */
+function collaboratorRouteIds(userId) {
+  return db.prepare('SELECT route_id FROM route_collaborators WHERE user_id = ?').all(userId).map(r => r.route_id);
+}
+
+/* 批量取用户名（列表卡片「由 xxx 发起」） */
+function userNames(userIds) {
+  const out = {};
+  if (!userIds.length) return out;
+  const ph = userIds.map(() => '?').join(',');
+  db.prepare(`SELECT id, username FROM users WHERE id IN (${ph})`).all(...userIds)
+    .forEach(u => { out[u.id] = u.username; });
+  return out;
+}
+
+/* 协作候选人：同服务器 active 用户（用户名/邮箱前缀匹配），排除 owner 与已在名单者。
+ * 只回传 id + username（不含邮箱，最小暴露）。 */
+function collabCandidates(routeId, ownerId, q) {
+  const route = db.prepare('SELECT owner_id, is_seed FROM routes WHERE id = ?').get(routeId);
+  if (!route || route.is_seed || route.owner_id !== ownerId) return [];
+  const like = `%${String(q || '').replace(/[\\%_]/g, m => '\\' + m)}%`;
+  return db.prepare(`SELECT id, username FROM users
+    WHERE status = 'active' AND id != ? AND id NOT IN (SELECT user_id FROM route_collaborators WHERE route_id = ?)
+      AND (username LIKE ? ESCAPE '\\' OR (email IS NOT NULL AND email LIKE ? ESCAPE '\\'))
+    ORDER BY username LIMIT 10`).all(ownerId, routeId, like, like);
+}
+
+/* 本人路线年份（年报年份胶囊用，与 footprintRecap.available_years 的路线部分同口径） */
+function footprintRecapYears(ownerId) {
+  return db.prepare(`SELECT DISTINCT year FROM routes
+    WHERE owner_id = ? AND is_seed = 0 AND year IS NOT NULL AND year != ''`).all(ownerId).map(r => r.year);
+}
+
+/* ---------- 年度旅行报告（footprint recap）----------
+ * 聚合三类既有唯一口径，不新建数据：
+ *   点亮/成就 → footprintSummary（累计 + 按年新增）
+ *   花费/天数 → 本人 owner 的非种子路线（routes.year 匹配；与 stats/summary 同为本人口径，
+ *               协作路线不计入，避免家庭账双算），9 类金额经 fx 换算本位币
+ *   最贵一笔 → 该年路线流水按路线币种换算本位币后取最大 */
+function footprintRecap(ownerId, year) {
+  const y = String(year || '').trim();
+  if (!/^\d{4}$/.test(y)) { const e = new Error('年份格式应为 YYYY'); e.code = 'INVALID_YEAR'; throw e; }
+  const summary = footprintSummary(ownerId);
+  const yearly = (summary.yearly || []).find(v => v.year === y) ||
+    { year: y, new_cities: [], new_count: 0, provinces: [], countries: [] };
+
+  const fx = require('./fx');
+  const home = db.prepare('SELECT home_currency FROM site_settings WHERE id = 1').get();
+  const homeCur = (home && home.home_currency) || 'CNY';
+  const routes = db.prepare(`SELECT ${ROUTE_COLS} FROM routes
+    WHERE owner_id = ? AND is_seed = 0 AND year = ? ORDER BY created_at DESC`).all(ownerId, y);
+
+  let days = 0, grand = 0, budgetTrips = 0, budgetWithin = 0;
+  let top = null, longest = null;
+  const routeIds = routes.map(r => r.id);
+  for (const r of routes) {
+    const cur = r.currency || 'CNY';
+    let t = 0;
+    for (const k of EXP_KEYS) t += fx.convert(num(r[EXP_COL[k]]), cur, homeCur).value;
+    grand += t; days += (r.days || 0);
+    if (num(r.budget_total) > 0) { budgetTrips++; if (t <= num(r.budget_total)) budgetWithin++; }
+    if (!longest || (r.days || 0) > (longest.days || 0)) {
+      longest = { id: r.id, name: r.name, days: r.days || 0, daterange: r.daterange || '' };
+    }
+    if (routeIds.length) {
+      const row = db.prepare(`SELECT title, category, amount, currency, spent_on FROM expenses
+        WHERE route_id = ? AND amount > 0 ORDER BY amount DESC LIMIT 1`).get(r.id);
+      if (row) {
+        const conv = fx.convert(num(row.amount), row.currency || cur, homeCur).value;
+        if (!top || conv > top.value_cny) {
+          top = { title: row.title || row.category, category: row.category,
+            amount: num(row.amount), currency: row.currency || cur, spent_on: row.spent_on || '',
+            value: Math.round(conv * 100) / 100 };
+        }
+      }
+    }
+  }
+
+  /* 可选年份：点亮年份 ∪ 本人路线年份（倒序） */
+  const routeYears = db.prepare(`SELECT DISTINCT year FROM routes
+    WHERE owner_id = ? AND is_seed = 0 AND year IS NOT NULL AND year != ''`).all(ownerId).map(r => r.year);
+  const years = [...new Set([...(summary.years || []), ...routeYears])].sort((a, b) => b.localeCompare(a));
+
+  return {
+    year: y,
+    homeCurrency: homeCur,
+    available_years: years,
+    lit: {
+      total_cities: summary.cityCount, total_provinces: summary.provinceCount,
+      total_countries: summary.countryCount,
+      new_cities: yearly.new_cities, new_count: yearly.new_count,
+      new_provinces: yearly.provinces || [], new_countries: yearly.countries || []
+    },
+    trip: {
+      count: routes.length, days, grand: Math.round(grand * 100) / 100,
+      top_expense: top, longest,
+      budget_within: budgetTrips ? { within: budgetWithin, total: budgetTrips } : null
+    },
+    achievements: (summary.achievements || []).filter(a => a.done)
+  };
 }
 
 /* ---------- AI 配置 ---------- */
@@ -1618,5 +1829,12 @@ module.exports = {
   seedPlaces, migrateDestToStructured, resolvePlaceRefs, listRoutePlaces, placesForRoutes,
   recomputeDestMirror, setRoutePlaces, searchPlaces,
   footprintSummary, footprintMapData, pendingRoutes, manualLit,
+  /* 路线级家庭协作 */
+  MAX_COLLABORATORS, isCollaborator, listCollaborators, addCollaborator, removeCollaborator,
+  collaboratorRouteIds, userNames, collabCandidates,
+  /* 年度旅行报告 */
+  footprintRecap, footprintRecapYears,
+  /* 足迹地图底图配置 */
+  MAP_PROVIDERS, getMapConfig, saveMapConfig, footprintMapVer,
   round2
 };

@@ -14,3 +14,6 @@ CONTEXT-FOR-AGENTS.md
 REVIEW-*.md
 # 构建时下载缓存（DataV.GeoAtlas 行政区划原始 JSON，4 MB，不入库；产物为 server/places_data.js）
 tools/.geo-cache/
+
+# 本地体验服务数据卷（不进仓库）
+.local-data/

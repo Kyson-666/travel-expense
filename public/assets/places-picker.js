@@ -1,7 +1,7 @@
 /* places-picker.js — 标准地名多选选择器（足迹点亮 · 路线表单）
  * 交互：搜索框（汉字模糊 + 拼音/首字母前缀，市优先）→ 下拉候选 → 选中成 chip；
- * chips 可左右移调整顺序（即 dest 展示顺序），上限 20。
- * 选中值以 adcode 为准（稳定 ID），展示名带省份前缀消歧（如「朝阳（辽宁）」）。
+ * chips 仅支持移除（先选的排前面，即 dest 展示顺序；不提供排序按钮，保持行内紧凑），
+ * 上限 20。选中值以 adcode 为准（稳定 ID），展示名带省份前缀消歧（如「朝阳（辽宁）」）。
  * createPlacePicker(container, opts) → { getSelection, setSelection, destroy } */
 import { api, toast, esc } from './api.js';
 
@@ -53,17 +53,9 @@ export function createPlacePicker(container, opts = {}) {
       <span class="pp-chip${p.level === 'province' ? ' pp-chip-prov' : (p.level === 'country' ? ' pp-chip-country' : '')}" role="listitem">
         ${esc(placeLabel(p))}
         <button type="button" class="pp-x" data-i="${i}" title="移除" aria-label="移除 ${esc(p.name)}">×</button>
-        ${single ? '' : `<button type="button" class="pp-mv" data-dir="-1" data-i="${i}" title="左移" aria-label="左移 ${esc(p.name)}" ${i === 0 ? 'disabled' : ''}>◀</button>
-        <button type="button" class="pp-mv" data-dir="1" data-i="${i}" title="右移" aria-label="右移 ${esc(p.name)}" ${i === selected.length - 1 ? 'disabled' : ''}>▶</button>`}
       </span>`).join('');
     chipsEl.querySelectorAll('.pp-x').forEach(b => b.onclick = () => {
       selected.splice(+b.dataset.i, 1); renderChips(); emit();
-    });
-    chipsEl.querySelectorAll('.pp-mv').forEach(b => b.onclick = () => {
-      const i = +b.dataset.i, j = i + (+b.dataset.dir);
-      if (j < 0 || j >= selected.length) return;
-      [selected[i], selected[j]] = [selected[j], selected[i]];
-      renderChips(); emit();
     });
   }
 

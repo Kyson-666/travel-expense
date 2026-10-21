@@ -7,7 +7,40 @@ import { store, toast, api, navigate, esc } from './api.js';
 import { createPlacePicker } from './places-picker.js';
 import { openRouteEditor } from './app.js';
 
-const fp = { tab: 'map', mode: 'city', year: 'all', map: null, summary: null, mapOpen: false, animated: false };
+const fp = { tab: 'map', mode: 'city', year: 'all', map: null, summary: null, mapOpen: false, animated: false, mapConfig: null, sdkMap: null };
+
+/* 地图数据缓存：localStorage 持久缓存 + 服务端版本戳（点亮流水只增不删 → ver 乐观锁）。
+ * 命中 ver → 服务端仅返回 notModified（省流量、秒开）；网络失败回退本地缓存（离线可看上次点亮）。 */
+const MAP_CACHE_KEY = 'fp_map_cache_v1';
+async function loadMapData() {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(MAP_CACHE_KEY) || 'null'); } catch (e) { cached = null; }
+  /* 缓存结构即扁平 {points, countries_lit, stats, ver}；完整性以 points 判定 */
+  const cacheOk = !!(cached && Array.isArray(cached.points) && cached.points.length);
+  try {
+    const r = await api.get('/footprints/map' + (cacheOk && cached.ver ? '?ver=' + encodeURIComponent(cached.ver) : ''));
+    if (r && r.notModified && cacheOk) return cached;
+    const data = { points: r.points || [], countries_lit: r.countries_lit || [], stats: r.stats || {}, ver: r.ver || '' };
+    if (!data.points.length && cacheOk) return cached; /* 异常空响应时宁用旧缓存 */
+    try { localStorage.setItem(MAP_CACHE_KEY, JSON.stringify(data)); } catch (e) { /* 隐私模式/存储满忽略 */ }
+    return data;
+  } catch (e) {
+    if (cacheOk) return cached;
+    throw e;
+  }
+}
+
+/* 底图增强配置：会话级缓存（管理员保存配置后，用户重新打开会话生效） */
+async function loadMapConfig() {
+  if (fp.mapConfig) return fp.mapConfig;
+  try { fp.mapConfig = await api.get('/footprints/map-config'); }
+  catch (e) { fp.mapConfig = { enabled: false, provider: 'none' }; }
+  return fp.mapConfig;
+}
+
+function skeleton() {
+  return `<div class="wrap"><div class="empty">足迹加载中…</div></div>`;
+}
 
 /* 点阵投影（线性等距）：覆盖经度 73–135.5、纬度 17.5–54.5 主图区 */
 const PX = (lon) => (lon - 73) * 9.4 + 18;
@@ -18,16 +51,14 @@ const SY = (lat) => 390 + (21 - lat) * 3.8;
 
 const MUNI = new Set(['北京', '上海', '天津', '重庆', '香港', '澳门']);
 
-function skeleton() {
-  return `<div class="wrap"><div class="empty">足迹加载中…</div></div>`;
-}
-
 export async function renderFootprint() {
   const view = document.getElementById('view');
   view.innerHTML = skeleton();
   try {
-    const [map, summary] = await Promise.all([api.get('/footprints/map'), api.get('/footprints/summary')]);
-    fp.map = map; fp.summary = summary;
+    const [map, summary, mapCfg] = await Promise.all([
+      loadMapData(), api.get('/footprints/summary'), loadMapConfig()
+    ]);
+    fp.map = map; fp.summary = summary; fp.mapConfig = mapCfg;
   } catch (e) {
     view.innerHTML = `<div class="wrap"><div class="empty">足迹数据加载失败：${esc(e.message || '未知错误')}<br>
       <button class="btn btn-primary btn-sm" id="fpRetry" style="margin-top:10px">重试</button></div></div>`;
@@ -40,10 +71,11 @@ export async function renderFootprint() {
 }
 
 function render() {
+  destroySdkMap();
   const s = fp.summary, m = fp.map;
   const view = document.getElementById('view');
   const tabs = [
-    ['map', '地图'], ['ach', '成就'], ['year', '回顾'], ['manage', '管理']
+    ['map', '地图'], ['ach', '成就'], ['recap', '年报'], ['year', '回顾'], ['manage', '管理']
   ];
   view.innerHTML = `<div class="wrap fp-wrap">
     <div class="fp-head">
@@ -66,8 +98,115 @@ function render() {
   const body = document.getElementById('fpBody');
   if (fp.tab === 'map') renderMapTab(body);
   else if (fp.tab === 'ach') renderAchTab(body);
+  else if (fp.tab === 'recap') renderRecapTab(body);
   else if (fp.tab === 'year') renderYearTab(body);
   else renderManageTab(body);
+}
+
+/* ---------- 年度旅行报告（点亮 × 花费 × 成就长图） ---------- */
+async function renderRecapTab(body) {
+  body.innerHTML = '<div class="empty">年报加载中…</div>';
+  let years;
+  try {
+    const meta = await api.get('/footprints/recap');
+    years = (meta && meta.available_years) || [];
+  } catch (e) {
+    body.innerHTML = `<div class="empty">年报加载失败：${esc(e.message || '未知错误')}</div>`;
+    return;
+  }
+  if (!years.length) {
+    body.innerHTML = '<div class="empty">还没有可回顾的数据 —— 记录路线并点亮目的地后，这里会生成你的年度旅行报告</div>';
+    return;
+  }
+  fp.recapYear = fp.recapYear && years.includes(fp.recapYear) ? fp.recapYear : years[0];
+
+  body.innerHTML = `<div class="chip-row" id="recapYears">
+      ${years.map(y => `<button class="chip${fp.recapYear === y ? ' active' : ''}" data-year="${y}">${y}</button>`).join('')}
+    </div>
+    <div id="recapCardBox"></div>
+    <div style="margin-top:10px"><button class="btn btn-primary btn-block" id="recapExport">生成分享长图（PNG）</button></div>
+    <div class="fp-note">口径：花费为本位币换算合计（仅本人路线，协作账本归发起人统计）；点亮含「年度新增」与「累计」两层。</div>`;
+
+  body.querySelectorAll('#recapYears .chip').forEach(c => c.onclick = () => { fp.recapYear = c.dataset.year; renderRecapTab(body); });
+  await paintRecapCard(body);
+  body.querySelector('#recapExport').onclick = exportRecapImage;
+}
+
+async function paintRecapCard(body) {
+  const box = document.getElementById('recapCardBox');
+  let d;
+  try { d = await api.get('/footprints/recap?year=' + encodeURIComponent(fp.recapYear)); }
+  catch (e) { box.innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`; return; }
+  const lit = d.lit || {}, trip = d.trip || {};
+  const money = (v) => fmtCny(v, d.homeCurrency);
+  const achHtml = (d.achievements || []).map(a => `<span class="chip fp-chip-lit">${esc(a.title)}</span>`).join('') || '<span class="fp-c-label">本年度暂无新成就</span>';
+  const newCities = (lit.new_cities || []);
+  box.innerHTML = `<div class="panel" id="recapCard">
+    <div style="text-align:center;padding:14px 10px 12px;background:var(--primary);color:#fff;border-radius:12px;margin-bottom:12px">
+      <div style="font-size:12px;opacity:.85">${esc(d.year)} · 我的旅行年报</div>
+      <div style="font-size:20px;font-weight:500;margin-top:5px">点亮 ${lit.total_cities || 0} 城 · ${lit.total_provinces || 0} 省${lit.total_countries ? ' · ' + lit.total_countries + ' 国' : ''}</div>
+    </div>
+    <div class="stat-cards fp-stats">
+      <div class="stat"><div class="v">${lit.new_count || 0}</div><div class="l">年度新增点亮</div></div>
+      <div class="stat"><div class="v">${trip.count || 0}</div><div class="l">行程次数</div></div>
+      <div class="stat"><div class="v">${trip.days || 0}</div><div class="l">在路上天数</div></div>
+      <div class="stat"><div class="v">${money(trip.grand || 0)}</div><div class="l">年度总花费</div></div>
+    </div>
+    <div class="panel" style="margin-top:10px"><h3>年度亮点</h3>
+      <div class="detail-row"><span class="k">最贵一笔</span><span class="v">${trip.top_expense ? esc(trip.top_expense.title) + ' · ' + money(trip.top_expense.value != null ? trip.top_expense.value : trip.top_expense.amount) : '—'}</span></div>
+      <div class="detail-row"><span class="k">最长旅程</span><span class="v">${trip.longest && trip.longest.days ? esc(trip.longest.name) + '（' + trip.longest.days + ' 天）' : '—'}</span></div>
+      <div class="detail-row"><span class="k">预算完成</span><span class="v">${trip.budget_within ? trip.budget_within.within + ' / ' + trip.budget_within.total + ' 次行程控制在预算内' : '—'}</span></div>
+      ${newCities.length ? `<div class="detail-row"><span class="k">新点亮</span><span class="v">${newCities.map(esc).join(' · ')}</span></div>` : ''}
+      ${(lit.new_countries || []).length ? `<div class="detail-row"><span class="k">新国家/地区</span><span class="v">${lit.new_countries.map(esc).join(' · ')}</span></div>` : ''}
+    </div>
+    <div class="panel" style="margin-top:10px"><h3>已获成就</h3><div class="chip-row">${achHtml}</div></div>
+  </div>`;
+}
+
+/* 长图导出：与分享页同一份 html2canvas（CSP script-src 'self' 同源加载）。
+ * 手机看图比例：离屏克隆卡片并固定 1080px 宽、放大字号、补底部落款，高度随内容自适应 ——
+ * 避免直接截桌面面板得到「矮宽扁」的图。 */
+async function exportRecapImage() {
+  const el = document.getElementById('recapCard');
+  if (!el) return;
+  if (typeof window.html2canvas !== 'function') { toast('导出组件未就绪，请稍后重试'); return; }
+  toast('正在生成长图…');
+  /* 离屏容器：视口外 + 固定 1080 宽，clone 后按手机阅读放大字号与间距 */
+  const stage = document.createElement('div');
+  stage.style.cssText = 'position:fixed;left:-99999px;top:0;width:1080px;background:#f4f8f6;padding:36px;z-index:-1';
+  const clone = el.cloneNode(true);
+  clone.style.cssText = 'width:100%;margin:0;background:#fff;border:1px solid #dcebe6;border-radius:24px;padding:36px;font-size:30px';
+  clone.querySelectorAll('h3').forEach(h => { h.style.cssText = 'font-size:34px;margin:0 0 18px'; });
+  clone.querySelectorAll('.detail-row').forEach(r => { r.style.cssText = 'display:flex;justify-content:space-between;gap:24px;padding:14px 0;font-size:30px;border-bottom:1px dashed #e3efeb'; });
+  clone.querySelectorAll('.detail-row .k').forEach(k => { k.style.cssText = 'color:#6b7d79;flex:0 0 auto'; });
+  clone.querySelectorAll('.detail-row .v').forEach(v => { v.style.cssText = 'text-align:right;word-break:break-all'; });
+  clone.querySelectorAll('.stat-cards').forEach(sc => { sc.style.cssText = 'display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin:0 0 18px'; });
+  clone.querySelectorAll('.stat-cards .stat').forEach(st => { st.style.cssText = 'background:#f4f8f6;border-radius:16px;padding:20px;text-align:center'; });
+  clone.querySelectorAll('.stat-cards .stat .v').forEach(v => { v.style.cssText = 'font-size:40px;font-weight:500'; });
+  clone.querySelectorAll('.stat-cards .stat .l').forEach(l => { l.style.cssText = 'font-size:24px;color:#6b7d79;margin-top:6px'; });
+  clone.querySelectorAll('.chip-row').forEach(cr => { cr.style.cssText = 'display:flex;flex-wrap:wrap;gap:12px'; });
+  clone.querySelectorAll('.chip').forEach(c => { c.style.cssText = 'font-size:26px;padding:8px 18px'; });
+  const foot = document.createElement('div');
+  foot.style.cssText = 'text-align:center;color:#9db4ae;font-size:22px;padding:26px 0 6px';
+  foot.textContent = '由旅行经费工作台生成 · ' + fp.recapYear + ' 年度旅行报告';
+  stage.appendChild(clone);
+  stage.appendChild(foot);
+  document.body.appendChild(stage);
+  try {
+    const canvas = await window.html2canvas(stage, { scale: 2, useCORS: true, backgroundColor: '#f4f8f6', logging: false });
+    const link = document.createElement('a');
+    link.download = '旅行年报_' + fp.recapYear + '_' + new Date().toISOString().slice(0, 10) + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    toast('长图已生成（1080 宽 · 手机阅读比例）');
+  } catch (e) { toast('生成失败：' + (e.message || e)); }
+  finally { stage.remove(); }
+}
+
+function fmtCny(v, cur) {
+  const n = parseFloat(v);
+  const val = isFinite(n) ? n : 0;
+  return (cur || 'CNY') === 'CNY' ? '¥' + val.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : cur + ' ' + val.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 }
 
 /* ---------- 地图 ---------- */
@@ -93,14 +232,128 @@ function renderMapTab(body) {
           ${years.map(y => `<button class="chip${fp.year === y ? ' active' : ''}" data-year="${y}">${y}</button>`).join('')}
         </div>` : ''}
       </div>
-      <div class="fp-map-wrap"><svg id="fpSvg" viewBox="0 0 680 470" role="img" aria-label="中国足迹点亮点阵地图（示意，不含边界线）"></svg></div>
+      <div class="fp-map-wrap" id="fpMapHost"></div>
       ${s.countries.length ? `<div class="fp-countries"><span class="fp-c-label">🌍 国家/地区：</span>
         ${s.countries.map(c => `<span class="chip fp-chip-country">${esc(c.name)}${c.first_lit_on ? ' <i>' + esc(String(c.first_lit_on).slice(0, 4)) + '</i>' : ''}</span>`).join('')}</div>` : ''}
     </div>
     <div class="panel"><h3>点亮列表</h3><div id="fpLitList">${litListHtml()}</div></div>`;
 
-  drawMap();
   bindMapEvents(body);
+  paintMapHost();
+}
+
+/* 地图宿主分流：管理员开启底图增强 → 真实底图渲染（失败自动降级点阵）；否则自绘点阵 */
+function paintMapHost() {
+  const host = document.getElementById('fpMapHost');
+  if (!host) return;
+  const cfg = fp.mapConfig;
+  if (cfg && cfg.enabled && (cfg.provider === 'amap' || cfg.provider === 'tencent') && fp.mapOpen) {
+    host.innerHTML = `<div id="fpSdkMap" style="height:430px;border-radius:10px;overflow:hidden;background:#e8eef0"></div>
+      <div class="hint" style="margin-top:6px">底图由${cfg.provider === 'amap' ? '高德地图' : '腾讯地图'}提供（管理员已开启）；标记为示意点亮，不含行政边界。点击城市点查看详情。</div>`;
+    renderSdkMap(document.getElementById('fpSdkMap'), cfg).catch(e => {
+      toast('底图加载失败，已降级为点阵示意：' + (e.message || e));
+      paintDotMap(host);
+    });
+  } else if (cfg && cfg.enabled && fp.mapOpen) {
+    host.innerHTML = `<div class="empty">底图配置异常，已使用点阵示意</div>`;
+    paintDotMap(host);
+  } else {
+    paintDotMap(host);
+  }
+}
+
+function paintDotMap(host) {
+  host.innerHTML = `<svg id="fpSvg" viewBox="0 0 680 470" role="img" aria-label="中国足迹点亮点阵地图（示意，不含边界线）"></svg>`;
+  drawMap();
+  bindDotMapClicks();
+}
+
+/* ---------- 底图增强（高德 / 腾讯 JS SDK） ----------
+ * 坐标系：places_data 源自 DataV.GeoAtlas（GCJ-02），与高德/腾讯底图同系，无需转换。
+ * 仅渲染点亮相关标记与省名标注（底图自身已有地理要素）；点击标记复用省份抽屉。 */
+function loadSdkScript(provider, cfg) {
+  if (provider === 'amap' && window.AMap) return Promise.resolve();
+  if (provider === 'tencent' && window.TMap) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    const timer = setTimeout(() => reject(new Error('SDK 加载超时')), 12000);
+    s.onload = () => { clearTimeout(timer); (provider === 'amap' ? window.AMap : window.TMap) ? resolve() : reject(new Error('SDK 未就绪')); };
+    s.onerror = () => { clearTimeout(timer); reject(new Error('SDK 脚本加载失败（检查 Key / 域名白名单 / 网络）')); };
+    if (provider === 'amap') {
+      if (cfg.amap_security) window._AMapSecurityConfig = { securityJsCode: cfg.amap_security };
+      s.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(cfg.amap_key);
+    } else {
+      s.src = 'https://map.qq.com/api/gljs?v=1.exp&key=' + encodeURIComponent(cfg.tencent_key);
+    }
+    document.head.appendChild(s);
+  });
+}
+
+function destroySdkMap() {
+  if (fp.sdkMap) { try { fp.sdkMap.destroy(); } catch (e) { /* ignore */ } fp.sdkMap = null; }
+}
+
+async function renderSdkMap(host, cfg) {
+  destroySdkMap();
+  await loadSdkScript(cfg.provider, cfg);
+  const m = fp.map;
+  const litPts = m.points.filter(p => p.lit && yearFiltered(p) && p.level === 'city');
+  const litProvs = m.points.filter(p => p.lit && yearFiltered(p) && p.level === 'province');
+  const provLabel = (p) => MUNI.has(p.name) ? '' : (p.name || '');
+  const dotIcon = (color) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.5" fill="${color}" stroke="#fff" stroke-width="1.6"/></svg>`);
+
+  if (cfg.provider === 'amap') {
+    const AMap = window.AMap;
+    const map = new AMap.Map(host, { zoom: 4, center: [104.8, 36.6], viewMode: '2D', mapStyle: 'amap://styles/whitesmoke', zooms: [3.5, 12] });
+    fp.sdkMap = map;
+    litPts.forEach(p => {
+      const mk = new AMap.Marker({ position: [p.lng, p.lat], anchor: 'center',
+        content: `<img src="${dotIcon('#15a98c')}" style="width:18px;height:18px" alt="">`, title: p.name });
+      mk.on('click', () => openProvSheet(p.province || p.name));
+      map.add(mk);
+    });
+    litProvs.forEach(p => {
+      const mk = new AMap.Marker({ position: [p.lng, p.lat], anchor: 'center',
+        content: `<img src="${dotIcon('#0f6e56')}" style="width:24px;height:24px" alt="">`, title: p.name });
+      mk.on('click', () => openProvSheet(p.name));
+      map.add(mk);
+    });
+    m.points.filter(x => x.level === 'province').forEach(p => {
+      const lit = yearFiltered(p);
+      const label = new AMap.Text({ text: provLabel(p), anchor: 'center', position: [p.lng, p.lat],
+        style: { 'font-size': '11px', 'color': lit ? '#0f6e56' : '#8aa39b', 'background': 'transparent', 'border': 'none', 'text-shadow': '0 0 3px #fff,0 0 3px #fff' } });
+      map.add(label);
+    });
+  } else {
+    const TMap = window.TMap;
+    const map = new TMap.Map(host, { zoom: 4, center: new TMap.LatLng(36.6, 104.8), baseMap: { type: 'vector' } });
+    fp.sdkMap = map;
+    const mkGeoms = litPts.map(p => ({ id: 'c' + p.id, position: new TMap.LatLng(p.lat, p.lng),
+      content: p.name, styleId: 'cityLit', properties: { prov: p.province || p.name } }));
+    litProvs.forEach(p => mkGeoms.push({ id: 'p' + p.id, position: new TMap.LatLng(p.lat, p.lng),
+      content: p.name, styleId: 'provLit', properties: { prov: p.name } }));
+    const styles = {
+      cityLit: new TMap.MarkerStyle({ width: 18, height: 18, anchor: { x: 9, y: 9 }, color: '#0f6e56',
+        src: dotIcon('#15a98c') }),
+      provLit: new TMap.MarkerStyle({ width: 24, height: 24, anchor: { x: 12, y: 12 }, color: '#0f6e56',
+        src: dotIcon('#0f6e56') })
+    };
+    const markers = new TMap.MultiMarker({ map, styles, geometries: mkGeoms });
+    markers.on('click', (evt) => {
+      const prop = evt.geometry && evt.geometry.properties;
+      if (prop && prop.prov) openProvSheet(prop.prov);
+    });
+    const labelGeoms = m.points.filter(x => x.level === 'province').map(p => ({
+      id: 'l' + p.id, position: new TMap.LatLng(p.lat, p.lng), content: provLabel(p),
+      styleId: yearFiltered(p) ? 'lit' : 'off'
+    }));
+    const labels = new TMap.MultiLabel({ map, styles: {
+      lit: new TMap.LabelStyle({ color: '#0f6e56', size: 12, angle: 0, alignment: 'center', verticalAlignment: 'middle' }),
+      off: new TMap.LabelStyle({ color: '#8aa39b', size: 12, angle: 0, alignment: 'center', verticalAlignment: 'middle' })
+    }, geometries: labelGeoms });
+    if (labelGeoms.length) labels.setMap(map);
+  }
 }
 
 function litListHtml() {
@@ -159,12 +412,21 @@ function drawMap() {
       } else {
         out += `<circle cx="${PX(p.lng).toFixed(1)}" cy="${PY(p.lat).toFixed(1)}" r="${r}" fill="${lit ? 'var(--primary)' : dotOffProv}"/>`;
       }
+      /* 省名标注（方案 C 可读性增强）：非直辖市在点旁标注，点亮省深色 */
+      if (!MUNI.has(p.name) && p.name !== '台湾') {
+        out += `<text x="${(PX(p.lng) + 8).toFixed(1)}" y="${(PY(p.lat) + 3).toFixed(1)}" font-size="8.5"
+          fill="${lit ? 'var(--primary-d, #0f6e56)' : '#9db4ae'}" style="pointer-events:none">${esc(p.name)}</text>`;
+      }
       out += `<circle cx="${PX(p.lng).toFixed(1)}" cy="${PY(p.lat).toFixed(1)}" r="16" fill="transparent" style="cursor:pointer" data-prov="${esc(p.name)}"/>`;
     }
   } else {
     for (const p of m.points.filter(x => x.level === 'province')) {
       const lit = yearFiltered(p);
       out += `<circle cx="${PX(p.lng).toFixed(1)}" cy="${PY(p.lat).toFixed(1)}" r="${MUNI.has(p.name) ? 4.8 : 4}" fill="${lit ? 'var(--primary)' : dotOffProv}"/>`;
+      if (!MUNI.has(p.name) && p.name !== '台湾') {
+        out += `<text x="${(PX(p.lng) + 7).toFixed(1)}" y="${(PY(p.lat) + 3).toFixed(1)}" font-size="8.5"
+          fill="${lit ? 'var(--primary-d, #0f6e56)' : '#9db4ae'}" style="pointer-events:none">${esc(p.name)}</text>`;
+      }
       out += `<circle cx="${PX(p.lng).toFixed(1)}" cy="${PY(p.lat).toFixed(1)}" r="14" fill="transparent" style="cursor:pointer" data-prov="${esc(p.name)}"/>`;
     }
     let i = 0;
@@ -185,15 +447,16 @@ function drawMap() {
     }
   }
   fp.animated = true;
+  /* 图例（左上角）：点亮 / 未点亮 */
+  out += `<g style="pointer-events:none">
+    <rect x="20" y="18" width="92" height="34" rx="7" fill="#ffffff" opacity=".88" stroke="#dbeae5"/>
+    <circle cx="33" cy="28" r="3.4" fill="var(--primary)"/><text x="42" y="31" font-size="9.5" fill="#1f2d2b">已点亮</text>
+    <circle cx="33" cy="42" r="2.6" fill="${dotOff}"/><text x="42" y="45" font-size="9.5" fill="#9db4ae">未点亮</text>
+  </g>`;
   svg.innerHTML = out;
 }
 
 function bindMapEvents(body) {
-  const svg = document.getElementById('fpSvg');
-  svg.querySelectorAll('circle[data-prov]').forEach(c => {
-    if (c.getAttribute('fill') !== 'transparent') return;
-    c.onclick = () => openProvSheet(c.dataset.prov);
-  });
   body.querySelectorAll('#fpMode .chip').forEach(b => b.onclick = () => { fp.mode = b.dataset.mode; render(); });
   body.querySelectorAll('#fpYear .chip').forEach(b => b.onclick = () => { fp.year = b.dataset.year; render(); });
   body.querySelectorAll('#fpLitList .fp-chip-lit').forEach(el => el.onclick = () => openProvSheet(el.dataset.prov));
@@ -203,7 +466,20 @@ function bindMapEvents(body) {
     toggle.textContent = fp.mapOpen ? '收起地图' : '展开点亮地图';
     document.querySelector('.fp-map-panel').classList.toggle('fp-map-open', fp.mapOpen);
     if (fp.mapOpen) document.querySelector('.fp-map-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    /* 收起时销毁 SDK 实例（释放底图资源）；展开时 paintMapHost 重新初始化 */
+    if (!fp.mapOpen) { destroySdkMap(); paintMapHost(); }
+    else paintMapHost();
   };
+}
+
+/* 点阵图点击绑定（独立函数：降级路径与首次绘制共用） */
+function bindDotMapClicks() {
+  const svg = document.getElementById('fpSvg');
+  if (!svg) return;
+  svg.querySelectorAll('circle[data-prov]').forEach(c => {
+    if (c.getAttribute('fill') !== 'transparent') return;
+    c.onclick = () => openProvSheet(c.dataset.prov);
+  });
 }
 
 /* 省份底部抽屉：省内已点亮城市 + 首次点亮年份 */

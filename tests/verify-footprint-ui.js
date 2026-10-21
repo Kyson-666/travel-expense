@@ -175,6 +175,11 @@ async function main() {
     await page.waitForSelector('.fp-ach', { timeout: 5000 });
     const achCount = await page.$$eval('.fp-ach', els => els.length);
     check('成就卡渲染 12 项', achCount === 12, achCount);
+    await page.click('#fpTabs .tab[data-tab="recap"]');
+    await page.waitForSelector('#recapCard', { timeout: 6000 });
+    const recapText = await page.$eval('#recapCard', el => el.textContent);
+    check('年报卡渲染（年份 + 总花费 + 成就）', recapText.includes('2026') && /总花费/.test(recapText) && /成就/.test(recapText), recapText.slice(0, 80));
+    check('年报年份胶囊存在', await page.$('#recapYears .chip') !== null);
     await page.click('#fpTabs .tab[data-tab="year"]');
     await page.waitForSelector('.fp-year-row', { timeout: 5000 });
     const yearText = await page.$eval('.fp-year-row', el => el.textContent);

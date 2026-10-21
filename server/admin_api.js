@@ -9,6 +9,7 @@ const { authFromReq, publicUser } = require('./auth');
 const mailer = require('./mailer');
 const dbModule = require('./db');
 const aiService = require('./ai_service');
+const mapService = require('./map_service');
 const { toCsv } = require('./csv');
 
 const db = () => dbModule.db;
@@ -214,6 +215,49 @@ async function handle(req, res, url, body) {
     }, admin.id);
     dbModule.audit(admin.id, 'update_ai_config', 'ai_config', '1', '更新 AI 模型配置', ip);
     return ok(res, true);
+  }
+  /* ---------- 足迹地图底图配置（默认关闭；关闭时足迹页维持自绘点阵） ---------- */
+  if (rest === '/map-config' && method === 'GET') {
+    const c = dbModule.getMapConfig();
+    return ok(res, {
+      provider: c.provider || 'none',
+      enabled: (c.provider || 'none') !== 'none',
+      /* key 属浏览器公开值（配合图商域名白名单），但设置页仍脱敏展示，'******' 表示保持原值 */
+      amap_key: c.amap_key ? '******' : '',
+      amap_security: c.amap_security ? '******' : '',
+      tencent_key: c.tencent_key ? '******' : '',
+      updated_at: c.updated_at, updated_by: c.updated_by
+    });
+  }
+  if (rest === '/map-config' && method === 'POST') {
+    const b = body || {};
+    if (!dbModule.MAP_PROVIDERS.has(String(b.provider || ''))) {
+      return fail(res, 400, '地图类型不正确（应为 none / amap / tencent）');
+    }
+    dbModule.saveMapConfig({
+      provider: b.provider,
+      amap_key: b.amap_key,
+      amap_security: b.amap_security,
+      tencent_key: b.tencent_key
+    }, admin.id);
+    const c = dbModule.getMapConfig();
+    dbModule.audit(admin.id, 'update_map_config', 'map_config', '1',
+      '更新足迹地图配置（provider=' + (c.provider || 'none') + '）', ip);
+    return ok(res, true);
+  }
+  if (rest === '/map-config/test' && method === 'POST') {
+    const b = body || {};
+    const provider = String(b.provider || '');
+    const saved = dbModule.getMapConfig();
+    /* '******' 表示沿用已保存的 key（未保存先测试：'******' 且无存值 → 视为未填写） */
+    const resolveKey = (v, old) => (v && v !== '******') ? String(v).trim() : String(old || '').trim();
+    let key = '';
+    if (provider === 'amap') key = resolveKey(b.amap_key, saved.amap_key);
+    else if (provider === 'tencent') key = resolveKey(b.tencent_key, saved.tencent_key);
+    const result = await mapService.testMapKey({ provider, key });
+    dbModule.audit(admin.id, 'test_map_config', 'map_config', '1',
+      '足迹地图连通性测试（provider=' + provider + '）：' + (result.ok ? '成功' : '失败'), ip);
+    return ok(res, result);
   }
   if (rest === '/ai-config/test' && method === 'POST') {
     try {

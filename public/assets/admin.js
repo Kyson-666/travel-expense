@@ -5,6 +5,7 @@ const NAV = [
   ['overview', '平台总览', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>'],
   ['users', '用户管理', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'],
   ['ai', 'AI 配置', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v1a3 3 0 0 1-3 3h-1v1a4 4 0 0 1-8 0v-1H7a3 3 0 0 1-3-3v-1a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="11" r="1"/><circle cx="15" cy="11" r="1"/></svg>'],
+  ['map', '地图配置', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/><path d="M8 2v16M16 6v16"/></svg>'],
   ['email', '邮件配置', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/></svg>'],
   ['site', '站点设置', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'],
   ['app', 'APP 更新', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>'],
@@ -44,6 +45,7 @@ function loadAdminPage(seg) {
   if (seg === 'overview') renderOverview(box);
   else if (seg === 'users') renderUsers(box);
   else if (seg === 'ai') renderAiConfig(box);
+  else if (seg === 'map') renderMapConfig(box);
   else if (seg === 'email') renderEmail(box);
   else if (seg === 'site') renderSite(box);
   else if (seg === 'app') renderAppUpdate(box);
@@ -297,6 +299,95 @@ async function handleUserAction(btn) {
     toast(act === 'ban' ? '已封禁' : act === 'unban' ? '已解封' : act === 'promote' ? '已设为管理员' : '已取消管理员');
     renderAdmin();
   } catch (e) { toast(e.message); }
+}
+
+/* ---------- 地图配置（足迹底图增强） ---------- */
+async function renderMapConfig(box) {
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  let cfg;
+  try { cfg = await api.get('/admin/map-config'); }
+  catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+
+  const prov = cfg.provider || 'none';
+  box.innerHTML = `<h2>足迹地图配置</h2>
+    <div class="hint" style="margin-bottom:12px">默认关闭 —— 足迹页使用自绘点阵示意（不含行政边界线，合规风险最低）。
+      接入图商后足迹地图改为真实底图渲染（点亮标记/省名标注/缩放拖动），底图由持牌图商输出，领土要素合规。
+      <b>地图展示本身不消耗 Key 的 REST 调用配额</b>，仅在管理员点击「测试连通性」时产生一次 REST 校验。
+      请自行前往对应开放平台申请 <b>Web 端（JS API）</b> Key，并绑定你自托管站点的域名白名单。</div>
+    <div class="admin-form">
+      <div class="field"><label>地图类型 <span class="hint">默认关闭；开启后所有登录用户的足迹页生效</span></label>
+        <select id="map_provider">
+          <option value="none" ${prov === 'none' ? 'selected' : ''}>关闭（自绘点阵示意）</option>
+          <option value="amap" ${prov === 'amap' ? 'selected' : ''}>高德地图（JS API 2.0）</option>
+          <option value="tencent" ${prov === 'tencent' ? 'selected' : ''}>腾讯地图（GL JS）</option>
+        </select></div>
+      <div class="field" id="map_amap_rows" style="display:${prov === 'amap' ? '' : 'none'}">
+        <div class="field"><label>高德 Key <span class="hint">${cfg.amap_key ? '已设置，留空/****** 保持不变' : ' lbs.amap.com → 应用管理 → Web端(JS API)'}</span></label>
+          <input id="map_amap_key" placeholder="${cfg.amap_key ? '******' : '在高德开放平台申请的 Web端 Key'}"></div>
+        <div class="field"><label>高德安全密钥 securityJsCode <span class="hint">${cfg.amap_security ? '已设置，保持不变' : '2021-12 起申请的 Key 必须配套（应用详情 → securityJsCode）'}</span></label>
+          <input id="map_amap_security" placeholder="${cfg.amap_security ? '******' : 'securityJsCode'}"></div>
+      </div>
+      <div class="field" id="map_tencent_rows" style="display:${prov === 'tencent' ? '' : 'none'}">
+        <label>腾讯地图 Key <span class="hint">${cfg.tencent_key ? '已设置，保持不变' : ' lbs.qq.com → 控制台 → 应用管理 → WebServiceAPI/JS'}</span></label>
+        <input id="map_tencent_key" placeholder="${cfg.tencent_key ? '******' : '在腾讯位置服务控制台申请的 Key'}">
+      </div>
+      <div class="auth-actions" style="flex-direction:row">
+        <button class="btn btn-line" id="map_test">测试连通性</button>
+        <button class="btn btn-primary" id="map_save">保存配置</button>
+      </div>
+      <div id="map_test_result" style="margin-top:10px"></div>
+    </div>`;
+
+  const provSel = document.getElementById('map_provider');
+  provSel.onchange = () => {
+    document.getElementById('map_amap_rows').style.display = provSel.value === 'amap' ? '' : 'none';
+    document.getElementById('map_tencent_rows').style.display = provSel.value === 'tencent' ? '' : 'none';
+  };
+  const currentKey = () => {
+    const p = provSel.value;
+    if (p === 'amap') return { provider: 'amap', amap_key: document.getElementById('map_amap_key').value };
+    if (p === 'tencent') return { provider: 'tencent', tencent_key: document.getElementById('map_tencent_key').value };
+    return { provider: 'none' };
+  };
+
+  document.getElementById('map_test').onclick = async () => {
+    const btn = document.getElementById('map_test');
+    const out = document.getElementById('map_test_result');
+    btn.disabled = true; btn.textContent = '测试中…';
+    out.innerHTML = '<div class="hint">正在向图商发起校验（约 1-3 秒）…</div>';
+    try {
+      /* 测试时 '******' 输入框留空 → 服务端自动沿用已保存 key */
+      const p = provSel.value;
+      const body = { provider: p };
+      if (p === 'amap') body.amap_key = document.getElementById('map_amap_key').value || '******';
+      if (p === 'tencent') body.tencent_key = document.getElementById('map_tencent_key').value || '******';
+      const res = await api.post('/admin/map-config/test', body);
+      out.innerHTML = res && res.ok
+        ? '<div class="banner" style="margin:0">✓ ' + esc(res.message) + '</div>'
+        : '<div class="banner" style="margin:0;background:#fcebeb;border-color:#f0b3b3">✗ ' + esc((res && res.message) || '测试失败') + '</div>';
+    } catch (e) {
+      out.innerHTML = '<div class="banner" style="margin:0;background:#fcebeb;border-color:#f0b3b3">✗ ' + esc(e.message || '测试失败') + '</div>';
+    } finally { btn.disabled = false; btn.textContent = '测试连通性'; }
+  };
+
+  document.getElementById('map_save').onclick = async () => {
+    try {
+      const body = Object.assign({
+        amap_key: document.getElementById('map_amap_key') ? document.getElementById('map_amap_key').value : '',
+        amap_security: document.getElementById('map_amap_security') ? document.getElementById('map_amap_security').value : '',
+        tencent_key: document.getElementById('map_tencent_key') ? document.getElementById('map_tencent_key').value : ''
+      }, currentKey());
+      /* '******' 语义由后端处理：输入框为空时也视为保持原值（传 '******'） */
+      if (provSel.value === 'amap') {
+        if (!body.amap_key) body.amap_key = cfg.amap_key ? '******' : '';
+        if (!body.amap_security) body.amap_security = cfg.amap_security ? '******' : '';
+      }
+      if (provSel.value === 'tencent' && !body.tencent_key) body.tencent_key = cfg.tencent_key ? '******' : '';
+      await api.post('/admin/map-config', body);
+      toast('地图配置已保存' + (provSel.value === 'none' ? '（已关闭底图增强）' : '，足迹页刷新后生效'));
+      renderMapConfig(box);
+    } catch (e) { toast('保存失败：' + e.message); }
+  };
 }
 
 /* ---------- AI 配置 ---------- */
