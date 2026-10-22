@@ -1,0 +1,57 @@
+name: Attach APK to Release
+
+# 为指定 tag 的 Release 确保附带 app-release.apk：
+#   1) 若该 Release 已有 app-release.apk → 跳过；
+#   2) 否则从最近一个带 APK 的历史 Release 复制一份（APK 的 web 层走热更新，
+#      无需每个版本重新打包）——保证用户在任何版本的 Release 页都能直接下载安装包。
+# 用法：Actions → Attach APK to Release → Run workflow → 填 tag（如 v1.2.3）
+#   或 CI 之后用 API 触发：
+#   POST /repos/<owner>/<repo>/actions/workflows/attach-apk.yml/dispatches
+#        {"ref":"main","inputs":{"tag":"v1.2.3"}}
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '目标 Release tag（APK 将复制到该 Release）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Attach app-release.apk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          echo "目标 Release: $TAG"
+          gh release view "$TAG" --repo "$REPO" >/dev/null || {
+            echo "❌ Release $TAG 不存在，请先创建 Release"; exit 1;
+          }
+          if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -qx 'app-release.apk'; then
+            echo "✅ $TAG 已包含 app-release.apk，跳过"
+            exit 0
+          fi
+
+          SRC=""
+          for t in $(gh release list --repo "$REPO" --limit 30 --json tagName -q '.[].tagName'); do
+            if [ "$t" = "$TAG" ]; then continue; fi
+            if gh release view "$t" --repo "$REPO" --json assets -q '.assets[].name' 2>/dev/null | grep -qx 'app-release.apk'; then
+              SRC="$t"; break
+            fi
+          done
+          if [ -z "$SRC" ]; then
+            echo "❌ 未找到任何带 app-release.apk 的历史 Release；请先运行 Build Android APK 工作流"
+            exit 1
+          fi
+
+          echo "从 $SRC 复制 app-release.apk → $TAG"
+          gh release download "$SRC" --repo "$REPO" -p 'app-release.apk' -O app-release.apk
+          gh release upload "$TAG" app-release.apk --repo "$REPO" --clobber
+          ls -lh app-release.apk
+          echo "✅ 已附加到 $TAG"

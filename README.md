@@ -336,9 +336,11 @@ node app.js            # 默认端口 3000；后端自动托管 public/ 前端�
 把网页版打包成手机原生 APP：桌面常驻图标、离线可开 UI、登录后像原生应用一样使用。APP 通过 `fetch` **直连你自托管的服务器**，数据仍全在你自己的服务器上，APP 本身不另存数据。
 
 ### 快速使用（已发布 APK）
-- **下载**：[`app-release.apk`（v1.1.5）](https://github.com/hanyuestar/travel-expense/releases/download/v1.1.5/app-release.apk)
-- 备用地址：<https://github.com/hanyuestar/travel-expense/releases/tag/v1.1.5>
+- **下载**：前往 [Releases](https://github.com/hanyuestar/travel-expense/releases) 页，**每个版本的 Release 都附带 `app-release.apk`**（连同 `app-release.json`：versionCode / versionName / sha256 / 大小）
+  - 最新版直链示例：<https://github.com/hanyuestar/travel-expense/releases/latest/download/app-release.apk>
+  - v1.2.3 直链：<https://github.com/hanyuestar/travel-expense/releases/download/v1.2.3/app-release.apk>
 - 手机允许「未知来源」安装后打开即可——**服务器地址已内置，打开即用，无需填写**。
+- APK 的 web 层走**热更新**：前端功能更新无需重装 APK；即使某版本 APK 未重新打包，Release 中也会附带最近一次构建的安装包（由 `Attach APK to Release` 工作流自动补，见「发版流程」）。
 
 > 该发布包已内置作者服务器地址；若你用自己的服务器，请按下面「自己构建」重新打包。
 
@@ -448,6 +450,18 @@ node tests/run-all.js                    # 在仓库根目录执行：一条命�
 - CI（GitHub Actions，`.github/workflows/ci.yml`）：Node 18/20/22 三版本跑全部测试
 
 [![CI](https://github.com/hanyuestar/travel-expense/actions/workflows/ci.yml/badge.svg)](https://github.com/hanyuestar/travel-expense/actions/workflows/ci.yml)
+
+### 发版流程（维护者）
+
+1. 改版本号：`server/package.json`、`docker-compose.yml`、`public/sw.js` 的 `VERSION`（CI 会校验与 package.json 一致，漏改直接 fail）
+2. 更新 `README` 版本变更记录 → 提交并推送 main（等 CI 三版本全绿）
+3. 打 tag 并推送单个 tag（**勿用 `git push --tags`**）→ 触发 `docker-image.yml` 双推 GHCR + Docker Hub
+4. 创建 GitHub Release（说明来自变更记录）
+5. **确保 Release 附带安卓安装包**（本项目约定：**每个版本都带 APK**，即使本次未重新打包）：
+   - 需要重新打包：Actions → `Build Android APK` → 输入目标 tag（正式签名，产物 `app-release.apk` + `app-release.json`）
+   - 无需重新打包：Actions → `Attach APK to Release` → 输入目标 tag（自动从最近一个带 APK 的 Release 复制）
+6. 校验产物：GHCR/Docker Hub 的 `vX.Y.Z` 与 `latest` manifest 均 200；Release 含 `app-release.apk`
+
 
 ---
 
