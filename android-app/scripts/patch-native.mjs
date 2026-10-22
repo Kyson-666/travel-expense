@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const target = join(root, 'android/app/src/main/java/com/hanyuestar/travelexpense/MainActivity.java');
-const MARKER = '// TE_NATIVE_PATCHED_V2';
+const MARKER = '// TE_NATIVE_PATCHED_V3';
 const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 
 let needWriteJava = true;
@@ -34,7 +34,7 @@ if (existsSync(target)) {
 }
 
 const content = String.raw`package com.hanyuestar.travelexpense;
-// TE_NATIVE_PATCHED_V2
+// TE_NATIVE_PATCHED_V3
 
 import android.app.AlertDialog;
 import android.content.DialogInterface;
@@ -208,14 +208,16 @@ public class MainActivity extends BridgeActivity {
 
     /* 后台检查并下载更新；任何失败都保留当前可运行版本，下次启动重试 */
     private void checkUpdate() {
+        JSONObject apkObj = null;
         try {
             String manifestJson = httpGetString(serverBaseUrl + "/api/app/manifest");
             JSONObject envelope = new JSONObject(manifestJson);
             JSONObject remote = envelope.optJSONObject("data");
             if (remote == null) remote = envelope; // 兼容直接返回 manifest 的情况
 
-            /* APK 自更新：无更高 versionCode 时完全静默，不影响下面的 web 热更新 */
-            checkApkUpdate(remote.optJSONObject("apk"));
+            /* APK 自更新后置到 web 热更新之后（见 finally）：先把前端更新装上，
+             * 再占用带宽下载安装包，避免大包下载推迟 web 更新生效 */
+            apkObj = remote.optJSONObject("apk");
 
             final String remoteVersion = remote.optString("version", "");
             if (remoteVersion.isEmpty()) { Log.w(TAG, "manifest 缺少 version，跳过"); return; }
@@ -280,6 +282,9 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception e) {
             Log.w(TAG, "热更新检查失败（保留当前版本）: " + e.getMessage());
             deleteRecursive(wwwNewDir());
+        } finally {
+            /* web 热更新结束后再处理 APK 自更新（manifest 解析失败时 apkObj 为 null，内部直接返回） */
+            checkApkUpdate(apkObj);
         }
     }
 
@@ -316,22 +321,114 @@ public class MainActivity extends BridgeActivity {
                 return;
             }
 
-            byte[] data = httpGetBytes(serverBaseUrl + "/api/app/apk");
-            String actual = sha256Hex(data);
-            if (expectSha != null && !expectSha.isEmpty() && !actual.equalsIgnoreCase(expectSha)) {
-                Log.e(TAG, "APK sha256 校验失败（期望 " + expectSha + " / 实际 " + actual + "），已放弃本次更新");
-                return;
+            /* 缓存复用：上次已下载并校验通过（仅未完成安装，例如未开启「未知来源」）时
+             * 直接复用，避免每次启动都重新下载整个安装包 */
+            if (cached.exists() && cached.length() > 0) {
+                boolean sizeOk = size <= 0 || cached.length() == size;
+                String cachedSha = sizeOk ? fileSha256(cached) : "";
+                if (sizeOk && (expectSha == null || expectSha.isEmpty() || cachedSha.equalsIgnoreCase(expectSha))) {
+                    Log.i(TAG, "复用已校验的 APK 缓存: " + cached.length() + " 字节");
+                    promptApkInstall(cached, remoteVc, remoteVn, cached.length(), notes);
+                    return;
+                }
+                Log.w(TAG, "APK 缓存校验不通过，清理后重新下载");
+                cached.delete();
+                File staleTmp = new File(cached.getParentFile(), cached.getName() + ".tmp");
+                if (staleTmp.exists()) staleTmp.delete();
             }
-            if (size > 0 && data.length != size) {
-                Log.e(TAG, "APK 大小不符（期望 " + size + " / 实际 " + data.length + "），已放弃本次更新");
-                return;
-            }
-            writeBytes(cached, data);
-            Log.i(TAG, "新 APK 已下载: " + cached.getAbsolutePath() + "（" + data.length + " 字节）");
-            promptApkInstall(cached, remoteVc, remoteVn, data.length, notes);
+
+            /* 流式下载：内存常数级、边下边算 sha256、失败可续传（替代原一次性 readBytes 全量缓存） */
+            downloadApkTo(cached, expectSha, size);
+            Log.i(TAG, "新 APK 已下载: " + cached.getAbsolutePath() + "（" + cached.length() + " 字节）");
+            promptApkInstall(cached, remoteVc, remoteVn, cached.length(), notes);
         } catch (Exception e) {
             Log.w(TAG, "APK 更新检查失败（保留当前版本，下次启动重试）: " + e.getMessage());
         }
+    }
+
+    /* 流式下载 APK：常数级内存（8KB 缓冲）、边下边算 sha256、支持断点续传。
+     * - tmp 已存在时以 Range 续写；服务端返回 200（不支持 Range）则整包重下；
+     * - 续传前先把已有字节喂入摘要，保证最终 sha256 与整包一致；
+     * - 校验通过后原子替换；sha256 不符或 416 则删 tmp（数据不可信，续传无意义）；
+     * - idle 超时放宽到 60s：NAS 上行慢，40s 对 3MB+ 的包在弱网下偏紧。 */
+    private void downloadApkTo(File dest, String expectSha, long expectSize) throws Exception {
+        File tmp = new File(dest.getParentFile(), dest.getName() + ".tmp");
+        long already = tmp.exists() ? tmp.length() : 0;
+        if (expectSize > 0 && already > expectSize) { tmp.delete(); already = 0; }
+        /* tmp 恰好完整（上次下完但未来得及 rename 的极端情况）：跳过网络直接校验替换 */
+        if (already > 0 && expectSize > 0 && already == expectSize) {
+            String s = fileSha256(tmp);
+            if (expectSha == null || expectSha.isEmpty() || s.equalsIgnoreCase(expectSha)) {
+                if (dest.exists()) dest.delete();
+                if (tmp.renameTo(dest)) return;
+            }
+            tmp.delete();
+            already = 0;
+        }
+
+        HttpURLConnection conn = openGet(serverBaseUrl + "/api/app/apk");
+        conn.setReadTimeout(60000);
+        if (already > 0) conn.setRequestProperty("Range", "bytes=" + already + "-");
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        try {
+            int code = conn.getResponseCode();
+            if (code == 416) {
+                tmp.delete();
+                throw new Exception("续传范围无效（服务端文件可能已变），已重置缓存，下次启动重试");
+            }
+            if (code < 200 || code >= 300) throw new Exception("HTTP " + code);
+            boolean append = already > 0 && code == 206;
+            if (!append) already = 0; // 服务端未按 Range 响应 → 从 0 重写
+            if (append) {
+                InputStream old = new FileInputStream(tmp);
+                try {
+                    byte[] ob = new byte[8192];
+                    int on;
+                    while ((on = old.read(ob)) != -1) md.update(ob, 0, on);
+                } finally { old.close(); }
+            }
+            InputStream is = conn.getInputStream();
+            try {
+                FileOutputStream fos = new FileOutputStream(tmp, append);
+                try {
+                    byte[] buf = new byte[8192];
+                    int n;
+                    long got = already;
+                    while ((n = is.read(buf)) != -1) {
+                        fos.write(buf, 0, n);
+                        md.update(buf, 0, n);
+                        got += n;
+                    }
+                    Log.i(TAG, "APK 下载完成: " + got + " 字节" + (append ? "（续传自 " + already + "）" : ""));
+                } finally { fos.close(); }
+            } finally { is.close(); }
+
+            long total = tmp.length();
+            if (expectSize > 0 && total != expectSize) {
+                throw new Exception("大小不符（期望 " + expectSize + " / 实际 " + total + "），下次启动续传");
+            }
+            String actual = hexOf(md.digest());
+            if (expectSha != null && !expectSha.isEmpty() && !actual.equalsIgnoreCase(expectSha)) {
+                tmp.delete();
+                throw new Exception("sha256 校验失败（期望 " + expectSha + " / 实际 " + actual + "）");
+            }
+            if (dest.exists()) dest.delete();
+            if (!tmp.renameTo(dest)) throw new Exception("临时文件重命名失败");
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    /* 流式计算文件 sha256（常数内存），用于缓存复用校验 */
+    private static String fileSha256(File f) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        InputStream is = new FileInputStream(f);
+        try {
+            byte[] b = new byte[8192];
+            int n;
+            while ((n = is.read(b)) != -1) md.update(b, 0, n);
+        } finally { is.close(); }
+        return hexOf(md.digest());
     }
 
     private void promptApkInstall(final File apkFile, final int remoteVc, final String remoteVn, final long size, final String notes) {
@@ -517,8 +614,10 @@ public class MainActivity extends BridgeActivity {
     }
 
     private static String sha256Hex(byte[] data) throws Exception {
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        byte[] d = md.digest(data);
+        return hexOf(MessageDigest.getInstance("SHA-256").digest(data));
+    }
+
+    private static String hexOf(byte[] d) {
         StringBuilder sb = new StringBuilder(d.length * 2);
         for (byte x : d) sb.append(String.format(Locale.US, "%02x", x & 0xff));
         return sb.toString();
