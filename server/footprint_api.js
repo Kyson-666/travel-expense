@@ -35,6 +35,8 @@ async function handle(req, res, url, body) {
   if (rest === '/map-config' && method === 'GET') {
     const c = dbModule.getMapConfig();
     const provider = c.provider || 'none';
+    /* 排查用：足迹页每次拿到的底图配置（不含 key 明文） */
+    console.log(`[map-config] served enabled=${provider !== 'none'} provider=${provider}`);
     if (provider === 'none') return ok(res, { enabled: false, provider: 'none' });
     return ok(res, {
       enabled: true, provider,

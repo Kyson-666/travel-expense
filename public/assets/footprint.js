@@ -8,6 +8,8 @@ import { createPlacePicker } from './places-picker.js';
 import { openRouteEditor } from './app.js';
 
 const fp = { tab: 'map', mode: 'city', year: 'all', map: null, summary: null, mapOpen: false, animated: false, mapConfig: null, sdkMap: null };
+/* 地图渲染分支去重（避免每次重渲染都上报 info 日志） */
+let _lastPaintMode = '';
 
 /* 地图数据缓存：localStorage 持久缓存 + 服务端版本戳（点亮流水只增不删 → ver 乐观锁）。
  * 命中 ver → 服务端仅返回 notModified（省流量、秒开）；网络失败回退本地缓存（离线可看上次点亮）。 */
@@ -221,6 +223,7 @@ function renderMapTab(body) {
       <div class="stat"><div class="v">${years.length}</div><div class="l">走过年份</div></div>
     </div>
     <button class="btn btn-line btn-block fp-map-toggle" id="fpMapToggle">${fp.mapOpen ? '收起地图' : '展开点亮地图'}</button>
+    <div class="hint" id="fpMapMode" style="text-align:center;margin:-4px 0 8px">${mapModeText()}</div>
     <div class="panel fp-map-panel${fp.mapOpen ? ' fp-map-open' : ''}">
       <div class="fp-controls">
         <div class="chip-row" id="fpMode">
@@ -242,12 +245,40 @@ function renderMapTab(body) {
   paintMapHost();
 }
 
+/* 地图面板是否实际可见：桌面端面板始终显示（无「展开」按钮，.fp-map-toggle 仅移动端显示），
+ * 移动端默认收起、展开后才有 .fp-map-open。底图 SDK 渲染必须以「可见」为准 ——
+ * 此前用 fp.mapOpen 门控，桌面端该值恒为 false → 底图永不加载（真机暴露）。 */
+function mapPanelVisible() {
+  const panel = document.querySelector('.fp-map-panel');
+  if (!panel) return false;
+  return getComputedStyle(panel).display !== 'none';
+}
+
+/* 底图模式文案：一眼看清当前用的是真实底图还是自绘点阵（排查「配置了但没生效」） */
+function mapModeText() {
+  const cfg = fp.mapConfig || {};
+  const visible = mapPanelVisible();
+  const tail = visible ? '' : ' · 点「展开点亮地图」查看';
+  if (cfg.enabled && cfg.provider === 'amap') return '底图：高德地图（管理员已开启）' + tail;
+  if (cfg.enabled && cfg.provider === 'tencent') return '底图：腾讯地图（管理员已开启）' + tail;
+  return '底图：点阵示意（自绘，未在管理后台开启底图增强）';
+}
+
 /* 地图宿主分流：管理员开启底图增强 → 真实底图渲染（失败自动降级点阵）；否则自绘点阵 */
 function paintMapHost() {
   const host = document.getElementById('fpMapHost');
   if (!host) return;
   const cfg = fp.mapConfig;
-  if (cfg && cfg.enabled && (cfg.provider === 'amap' || cfg.provider === 'tencent') && fp.mapOpen) {
+  const visible = mapPanelVisible();
+  const modeEl = document.getElementById('fpMapMode');
+  if (modeEl) modeEl.textContent = mapModeText();
+  /* 分支决策上报一次（同页面同组合去重）——排查「为什么没有加载底图」 */
+  const modeKey = (cfg && cfg.enabled ? cfg.provider : 'dot') + '|visible=' + visible;
+  if (modeKey !== _lastPaintMode) {
+    _lastPaintMode = modeKey;
+    reportClientError('info', 'fp-map-paint: ' + modeKey, '', { enabled: !!(cfg && cfg.enabled), provider: (cfg && cfg.provider) || 'none', panel_visible: visible });
+  }
+  if (cfg && cfg.enabled && (cfg.provider === 'amap' || cfg.provider === 'tencent') && visible) {
     host.innerHTML = `<div id="fpSdkMap" style="height:430px;border-radius:10px;overflow:hidden;background:#e8eef0"></div>
       <div class="hint" style="margin-top:6px">底图由${cfg.provider === 'amap' ? '高德地图' : '腾讯地图'}提供（管理员已开启）；标记为示意点亮，不含行政边界。点击城市点查看详情。</div>`;
     renderSdkMap(document.getElementById('fpSdkMap'), cfg).catch(e => {
@@ -261,8 +292,8 @@ function paintMapHost() {
       toast('底图加载失败，已降级为点阵示意');
       paintDotMap(host, e.message || String(e));
     });
-  } else if (cfg && cfg.enabled && fp.mapOpen) {
-    paintDotMap(host, '底图配置异常');
+  } else if (cfg && cfg.enabled && visible) {
+    paintDotMap(host, '底图配置异常，已使用点阵示意');
   } else {
     paintDotMap(host);
   }
@@ -279,8 +310,7 @@ function paintDotMap(host, sdkErr) {
   bindDotMapClicks();
 }
 
-/* ---------- 底图增强（高德 / 腾讯 JS SDK） ----------
- * 坐标系：places_data 源自 DataV.GeoAtlas（GCJ-02），与高德/腾讯底图同系，无需转换。
+/* ---------- 底图增强（高德 / 腾讯 JS SDK） ---------- * 坐标系：places_data 源自 DataV.GeoAtlas（GCJ-02），与高德/腾讯底图同系，无需转换。
  * 仅渲染点亮相关标记与省名标注（底图自身已有地理要素）；点击标记复用省份抽屉。 */
 function loadSdkScript(provider, cfg) {
   if (provider === 'amap' && window.AMap) return Promise.resolve();

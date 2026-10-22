@@ -243,6 +243,8 @@ async function handle(req, res, url, body) {
     const c = dbModule.getMapConfig();
     dbModule.audit(admin.id, 'update_map_config', 'map_config', '1',
       '更新足迹地图配置（provider=' + (c.provider || 'none') + '）', ip);
+    /* 关键排查信息：写日志（不含 key 明文，仅长度/是否设置），便于「保存了但没生效」类问题定位 */
+    console.log(`[map-config] saved provider=${c.provider || 'none'} amap_key_len=${(c.amap_key || '').length} security_set=${!!c.amap_security} tencent_key_len=${(c.tencent_key || '').length}`);
     return ok(res, true);
   }
   if (rest === '/map-config/test' && method === 'POST') {
