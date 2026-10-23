@@ -45,7 +45,7 @@
 | 全量回归 | `node tests/run-all.js` → **9 个脚本全绿** |
 | 正式前端真机 CDP | **35 条断言全绿**（含「页面无任何模式切换」专项断言） |
 | 演示版真机 CDP | **21 条断言全绿** |
-| Docker 镜像 | `v1.1.0` 已发布至 **ghcr.io/hanyuestar/travel-expense** 与 **kyson666/travel-expense**，`linux/amd64 + linux/arm64` 双架构，`latest` 已指向 v1.1.0 |
+| Docker 镜像 | `v1.1.0` 已发布至 **ghcr.io/kyson-666/travel-expense** 与 **kyson666/travel-expense**，`linux/amd64 + linux/arm64` 双架构，`latest` 已指向 v1.1.0 |
 | GitHub Release | `v1.1.0`（id `392280916`），附件 `app-debug.apk`（3,862,047 字节）已上传 |
 | APK 工作流 | `Build Android APK` → success |
 

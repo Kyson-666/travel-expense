@@ -1,7 +1,7 @@
 # PWA 离线记账 · 架构设计与实施规范
 
 > 版本：v1（设计冻结稿） · 日期：2026-10-14
-> 适用仓库：`travel-expense`（`hanyuestar/travel-expense`）
+> 适用仓库：`travel-expense`（`Kyson-666/travel-expense`）
 > 配套交互原型：[`proto-pwa-offline/`](./proto-pwa-offline/)（可双击打开，零依赖）
 > 目标读者：接手实施的模型 / 工程师。本文是**唯一权威契约**，实现与本文件冲突时以本文件为准。
 

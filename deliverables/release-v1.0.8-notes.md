@@ -13,7 +13,7 @@
 - 分享页独立 CSP（允许内联脚本以支持导出），主应用 CSP 仍保持「仅同源脚本」。
 
 ### 升级方式
-- 群晖 / Docker：`docker compose pull && docker compose up -d`（镜像 `ghcr.io/hanyuestar/travel-expense:v1.0.8` 或 `kyson666/travel-expense:v1.0.8`）。
+- 群晖 / Docker：`docker compose pull && docker compose up -d`（镜像 `ghcr.io/kyson-666/travel-expense:v1.0.8` 或 `kyson666/travel-expense:v1.0.8`）。
 - 安卓客户端：`app-debug.apk` 随本 Release 发布，内置服务器地址，安装即用。
 
 ### 校验

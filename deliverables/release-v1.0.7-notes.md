@@ -12,7 +12,7 @@
 
 ## 镜像
 
-- GitHub Container Registry：`ghcr.io/hanyuestar/travel-expense:v1.0.7`（或 `:latest`）
+- GitHub Container Registry：`ghcr.io/kyson-666/travel-expense:v1.0.7`（或 `:latest`）
 - Docker Hub：`kyson666/travel-expense:v1.0.7`（或 `:latest`）
 - 双架构 linux/amd64 + arm64，推送 `v*.*.*` tag 由 GitHub Actions 自动构建发布。
 
