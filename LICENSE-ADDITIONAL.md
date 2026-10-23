@@ -6,7 +6,7 @@
 
 - **项目**：旅行路线 · 经费台（travel-expense）—— 自托管的多用户旅行路线 + 经费管理工作台
 - **作者**：hanyuestar —— 独立设计并开发
-- **仓库**：https://github.com/hanyuestar/travel-expense
+- **仓库**：https://github.com/Kyson-666/travel-expense
 - **联系**：hanyueppy@foxmail.com（有合作意向欢迎来信）
 
 ---
@@ -26,7 +26,7 @@
 **3. 修改后再分发须注明来源。**
 若分发的是修改后的版本（含 Fork 与派生项目），应在 README 或其它显著位置注明：
 
-> 本项目基于 [hanyuestar/travel-expense](https://github.com/hanyuestar/travel-expense) 修改
+> 本项目基于 [Kyson-666/travel-expense](https://github.com/Kyson-666/travel-expense) 修改
 
 并简要说明主要修改内容。修改版本不得暗示为原作者官方版本。
 
@@ -69,6 +69,6 @@
 ## 四、合作与联系
 
 - **合作意向 / 定制开发 / 商务授权 / 许可条款澄清**：hanyueppy@foxmail.com
-- 问题反馈与功能建议：[GitHub Issues](https://github.com/hanyuestar/travel-expense/issues)
+- 问题反馈与功能建议：[GitHub Issues](https://github.com/Kyson-666/travel-expense/issues)
 
 > 使用者与 Fork 分支**必须保留原作者署名** —— 这是本项目开源的前提，感谢尊重。

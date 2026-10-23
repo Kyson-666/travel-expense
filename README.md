@@ -43,41 +43,41 @@
 
 | 工作台 | 逐笔流水 |
 |---|---|
-| ![工作台](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/01-workbench.png) | ![逐笔流水](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/02-ledger.png) |
+| ![工作台](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/01-workbench.png) | ![逐笔流水](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/02-ledger.png) |
 | 路线卡片显示**「流水 N 笔」**徽标与**「＋ 记一笔」**直达入口；统计卡含总花费 / 出行次数 / 次均花费 / 总天数（未设预算时显示「未设置 / —」） | 台账式流水：**按日期倒序分组**（组头为当日小计）、按 9 类筛选（胶囊只列出实际用到的类目）；历史数据以「期初（历史数据）」承载，并标注**「期初结转 · 不参与分摊」** |
 
 | 记一笔 | AA 结算 |
 |---|---|
-| ![记一笔](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/03-add-expense.png) | ![AA 结算](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/04-settle.png) |
+| ![记一笔](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/03-add-expense.png) | ![AA 结算](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/04-settle.png) |
 | 金额大号输入 + 快捷金额；选类目、**谁付的钱**、**谁参与分摊**；底部实时显示「**N 人平分，每人 ¥X · 由 XX 垫付**」；未选分摊人时给出橙色告警（该笔仅记录实付） | 三页签（概览 / 流水 / 结算）中的结算页：每人**实付 / 应负担 / 差额**（绿为应收、红为应付）+ **最少转账方案**（本例 4 人 → 3 笔，等于人数 − 1）；底部口径说明「未指定付款人（含历史期初数据）不参与结算」 |
 
 ### 同行人 · 路线表单 · AI 规划
 
 | 同行人管理 | 路线表单 |
 |---|---|
-| ![同行人管理](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/05-travelers.png) | ![路线表单](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/06-route-form.png) |
+| ![同行人管理](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/05-travelers.png) | ![路线表单](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/06-route-form.png) |
 | 逗号 / 空格分隔一次加多人；可改名、**「设为我」**标记记账人本人、移除（已被流水引用时二次确认并说明影响）；名单与登记人数不一致时给出提示 | **景点路线 / 住宿按天分框**：填好起止日期后自动按每天生成一个输入框（框头显示「D1 · 10月2日 周五」），长行程不再挤在一个框里；历史单框文本打开时会**自动按天预填**。表单**不再手工填写 9 类花费**，改为「由逐笔流水自动汇总（当前 N 笔）」+ **「去记流水」**直达 |
 
 | AI 规划：行程 / 注意事项 / 美食推荐 一次生成 |
 |---|
-| ![AI 规划与备注回填](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/07-ai-notes.png) |
+| ![AI 规划与备注回填](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/07-ai-notes.png) |
 | 「景点路线」旁点「AI 规划」→ 按天行程自动填入（按地理顺序、标注当天住宿城市）；**同时生成的「注意事项」与「美食推荐」自动写入备注**（上图中备注内容即 AI 产出）。若备注已有你自己的文字，则在其后**追加**（`—— AI 补充 ——`）而不是覆盖；重复生成也不会重复追加。生成后可点「调整」用大白话多轮修改。 |
 
 | 离线记账 · 待同步 | 离线记账 · 冲突处置与队列 |
 |---|---|
-| ![离线记账：待同步行与离线状态条](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/08-offline-pending.png) | ![同步队列：冲突二选一 · 导出留档 · 清理缓存](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@v1.1.4/screenshots/09-offline-queue-conflict.png) |
+| ![离线记账：待同步行与离线状态条](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/08-offline-pending.png) | ![同步队列：冲突二选一 · 导出留档 · 清理缓存](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@v1.1.4/screenshots/09-offline-queue-conflict.png) |
 | 断网也能记一笔：新行以**虚线边框 + 「待同步」胶囊**标记，顶部状态条显示待同步笔数；恢复网络后自动批量、幂等同步 | 同一笔在别处被修改时，队列面板给出**保留本地 / 采用服务端**二选一（可先「导出队列」留档）；面板同时显示**存储用量**并提供**清理缓存**（只清缓存、不动待同步数据） |
 
 ### 家庭协作 · 年度旅行报告 · 足迹地图增强（v1.3.0）
 
 | 家庭协作 · 邀请成员记账 | 足迹点阵地图（省名标注 + 图例） |
 |---|---|
-| ![家庭协作：邀请成员记账](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@main/screenshots/10-collab-manage.png) | ![足迹点阵地图：省名标注与图例](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@main/screenshots/11-footprint-map.png) |
+| ![家庭协作：邀请成员记账](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@main/screenshots/10-collab-manage.png) | ![足迹点阵地图：省名标注与图例](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@main/screenshots/11-footprint-map.png) |
 | 路线详情 →「邀请成员记账」：按用户名 / 邮箱搜索站内用户，一键邀请（上限 8 人）；成员可共同记流水 / 管同行人 / 查结算，不可改路线本体；移除成员其已记流水保留，操作人进审计日志 | 点亮省/市一目了然：**省名随点亮高亮**、左上角图例、点亮标记含首亮省份大标；含台湾省、港澳、南海诸岛附图与钓鱼岛示意点（不绘行政边界线）；管理后台开启底图增强后自动切换高德 / 腾讯真实底图（失败自动降级本图） |
 
 | 年度旅行报告 | 足迹地图底图配置 |
 |---|---|
-| ![年度旅行报告](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@main/screenshots/12-footprint-recap.png) | ![管理后台：足迹地图配置](https://cdn.jsdelivr.net/gh/hanyuestar/travel-expense@main/screenshots/13-map-config.png) |
+| ![年度旅行报告](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@main/screenshots/12-footprint-recap.png) | ![管理后台：足迹地图配置](https://cdn.jsdelivr.net/gh/Kyson-666/travel-expense@main/screenshots/13-map-config.png) |
 | 足迹页新增「年报」页签：点亮（累计 + 年度新增）× 花费（本位币）× 行程（天数 / 最贵一笔 / 最长旅程 / 预算完成率）× 成就徽章一页流；**一键生成 1080 宽手机比例分享长图** | 管理后台 →「地图配置」：默认关闭（合规最稳的自绘点阵）；可选接入高德 / 腾讯真实底图，Key 脱敏存储 + **一键测试连通性**（服务端直连厂商校验）；底图展示不消耗 Key 的 REST 调用配额 |
 
 ---
@@ -86,7 +86,7 @@
 
 不想部署也能体验功能？打开纯前端演示（无需后端、无需安装，数据临时保存在你的浏览器本地）：
 
-👉 **[点此体验在线 Demo](https://htmlpreview.github.io/?https://github.com/hanyuestar/travel-expense/blob/main/demo/index.html)**
+👉 **[点此体验在线 Demo](https://htmlpreview.github.io/?https://github.com/Kyson-666/travel-expense/blob/main/demo/index.html)**
 
 演示版为**单用户 localStorage 版**，内置示例数据，可随意新增 / 编辑 / 删除路线、**逐笔记账并体验 AA 分账**（示例「周末近郊轻旅行」已预置同行人与流水）、查看年度统计；另含**足迹点亮地图与年度旅行报告**（把路线「主要目的地」填成城市名即可点亮，示例数据已点亮 6 城 5 省，地图为自绘点阵、含台湾省/港澳/南海诸岛附图与钓鱼岛示意点）。所有改动仅存于当前浏览器，不会上传任何服务器。多用户特性（家庭协作、真实地图底图、AI 规划）需自托管体验。
 
@@ -271,9 +271,9 @@
 # 1. 建数据目录并放入 compose 文件（以群晖为例）
 mkdir -p /volume1/docker/travel
 cd /volume1/docker/travel
-curl -O https://raw.githubusercontent.com/hanyuestar/travel-expense/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/Kyson-666/travel-expense/main/docker-compose.yml
 
-# 2. 启动（自动拉取 ghcr.io/hanyuestar/travel-expense:v1.1.6）
+# 2. 启动（自动拉取 ghcr.io/kyson-666/travel-expense:v1.1.6）
 docker compose up -d
 
 # 3. 浏览器打开 http://<你的NAS>:8108 ，管理员 admin / 123456（首登强制改密）
@@ -284,7 +284,7 @@ docker compose up -d
 ```yaml
 services:
   travel-expense:
-    image: ghcr.io/hanyuestar/travel-expense:v1.1.6
+    image: ghcr.io/kyson-666/travel-expense:v1.1.6
     container_name: travel-expense
     restart: unless-stopped
     ports:
@@ -319,7 +319,7 @@ docker run -d --name travel-expense \
   -p 8108:3000 \
   -v /your/path/data:/data \
   --restart unless-stopped \
-  ghcr.io/hanyuestar/travel-expense:v1.1.6
+  ghcr.io/kyson-666/travel-expense:v1.1.6
 ```
 
 ### 方式 C：手动运行（无 Docker，需 Node 18+）
@@ -337,9 +337,9 @@ node app.js            # 默认端口 3000；后端自动托管 public/ 前端�
 把网页版打包成手机原生 APP：桌面常驻图标、离线可开 UI、登录后像原生应用一样使用。APP 通过 `fetch` **直连你自托管的服务器**，数据仍全在你自己的服务器上，APP 本身不另存数据。
 
 ### 快速使用（已发布 APK）
-- **下载**：前往 [Releases](https://github.com/hanyuestar/travel-expense/releases) 页，**每个版本的 Release 都附带 `app-release.apk`**（连同 `app-release.json`：versionCode / versionName / sha256 / 大小）
-  - 最新版直链示例：<https://github.com/hanyuestar/travel-expense/releases/latest/download/app-release.apk>
-  - v1.2.3 直链：<https://github.com/hanyuestar/travel-expense/releases/download/v1.2.3/app-release.apk>
+- **下载**：前往 [Releases](https://github.com/Kyson-666/travel-expense/releases) 页，**每个版本的 Release 都附带 `app-release.apk`**（连同 `app-release.json`：versionCode / versionName / sha256 / 大小）
+  - 最新版直链示例：<https://github.com/Kyson-666/travel-expense/releases/latest/download/app-release.apk>
+  - v1.2.3 直链：<https://github.com/Kyson-666/travel-expense/releases/download/v1.2.3/app-release.apk>
 - 手机允许「未知来源」安装后打开即可——**服务器地址已内置，打开即用，无需填写**。
 - APK 的 web 层走**热更新**：前端功能更新无需重装 APK；即使某版本 APK 未重新打包，Release 中也会附带最近一次构建的安装包（由 `Attach APK to Release` 工作流自动补，见「发版流程」）。
 
@@ -381,7 +381,7 @@ npm run build                                    # 产物：android/app/build/ou
 安卓 WebView 默认信任系统根证书；Let's Encrypt 证书本机原生信任。若登录时报「网站证据不被信任 / 证书不被信任」，绝大多数情况是**服务器证书的 SAN（主题备用名称）未覆盖你实际使用的子域名**。例如证书只签发给 `your-domain.example.com`，而 APP 内置地址是 `app.your-domain.example.com`——子域名不在证书内，WebView 即拒绝连接。
 
 - **推荐（一劳永逸，PC/手机浏览器与 APP 同步修复）**：在服务器侧重新申请 Let's Encrypt 证书时，把所用子域名加入 SAN（或在 Synology 证书里勾选 `*.your-domain.example.com` 通配符），并确保证书链完整。证书正确后无需改动 APP。
-- **APP 侧兜底（仅对你自己的服务器放宽）**：`MainActivity` 已内置「按主机放行」的 SSL 错误处理（见 `android-app/android/app/src/main/java/com/hanyuestar/travelexpense/MainActivity.java`）——仅当请求主机与你内置的服务器地址一致时才忽略证书信任错误，**不会**对任意主机盲目放行。适用于证书暂时无法改（内网/DDNS 限制）但需要 APP 立刻可用的情况。
+- **APP 侧兜底（仅对你自己的服务器放宽）**：`MainActivity` 已内置「按主机放行」的 SSL 错误处理（见 `android-app/android/app/src/main/java/com/Kyson-666/travelexpense/MainActivity.java`）——仅当请求主机与你内置的服务器地址一致时才忽略证书信任错误，**不会**对任意主机盲目放行。适用于证书暂时无法改（内网/DDNS 限制）但需要 APP 立刻可用的情况。
 
 > 该兜底需重新构建并发布 APK 才生效（`npm run build` 后替换 Release 中的 `app-debug.apk`）。服务端证书修好后，该逻辑对正确证书不触发，行为与普通 WebView 一致。
 
@@ -450,7 +450,7 @@ node tests/run-all.js                    # 在仓库根目录执行：一条命�
 - `tests/smoke-ai.test.js`：**AI 规划与调整**（权限门禁 / 结构化输出解析 / 参数校验 / 兼容回退），用本地 OpenAI 兼容 mock 承接模型请求，无需真实密钥
 - CI（GitHub Actions，`.github/workflows/ci.yml`）：Node 18/20/22 三版本跑全部测试
 
-[![CI](https://github.com/hanyuestar/travel-expense/actions/workflows/ci.yml/badge.svg)](https://github.com/hanyuestar/travel-expense/actions/workflows/ci.yml)
+[![CI](https://github.com/Kyson-666/travel-expense/actions/workflows/ci.yml/badge.svg)](https://github.com/Kyson-666/travel-expense/actions/workflows/ci.yml)
 
 ### 发版流程（维护者）
 
@@ -479,7 +479,7 @@ node tests/run-all.js                    # 在仓库根目录执行：一条命�
    #    多个构建并发会争抢 latest，导致 latest 指向旧版本（v1.0.2 曾踩此坑）
    ```
 3. 镜像推送到：
-   - `ghcr.io/hanyuestar/travel-expense`（必推）
+   - `ghcr.io/kyson-666/travel-expense`（必推）
    - `kyson666/travel-expense`（Docker Hub，可选）
 4. 也可在仓库 Actions 页面手动 `workflow_dispatch` 触发，调试场景可临时把 `push.tag` 改 `branches`/`pull_request` 等自由触发。
 
@@ -565,9 +565,9 @@ travel-expense/
 本项目由 **hanyuestar 独立设计并开发**，采用 **[MIT License](LICENSE) + [附加署名条款](LICENSE-ADDITIONAL.md)**。
 
 - **随便用、随便改、可商用，但请保留我的名字** —— 使用者与 Fork／衍生分支**必须完整保留原作者署名**，不得移除、遮盖、替换或伪造；
-- 修改后再分发请注明「基于 hanyuestar/travel-expense 修改」，且不得暗示为原作者官方版本；
+- 修改后再分发请注明「基于 Kyson-666/travel-expense 修改」，且不得暗示为原作者官方版本；
 - 完整条款见 [`LICENSE`](LICENSE) 与 [`LICENSE-ADDITIONAL.md`](LICENSE-ADDITIONAL.md)（含第三方组件声明与免责声明）。
 
-**合作与联系**：hanyueppy@foxmail.com ｜ 问题反馈：[GitHub Issues](https://github.com/hanyuestar/travel-expense/issues)
+**合作与联系**：hanyueppy@foxmail.com ｜ 问题反馈：[GitHub Issues](https://github.com/Kyson-666/travel-expense/issues)
 
 > ℹ️ 此前「仅供学习与交流使用」的表述已作废：本项目按 MIT 允许商业使用，唯一硬性要求是保留原作者署名。
