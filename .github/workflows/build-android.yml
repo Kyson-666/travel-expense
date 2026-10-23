@@ -117,6 +117,6 @@ jobs:
           gh release upload "$TAG" \
             android-app/android/app/build/outputs/apk/release/app-release.apk \
             android-app/app-release.json \
-            --clobber --repo hanyuestar/travel-expense
+            --clobber --repo "$GITHUB_REPOSITORY"
           # 清掉旧命名的 debug 包，避免用户下错
-          gh release delete-asset "$TAG" app-debug.apk --yes --repo hanyuestar/travel-expense || true
+          gh release delete-asset "$TAG" app-debug.apk --yes --repo "$GITHUB_REPOSITORY" || true
